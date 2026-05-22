@@ -1,0 +1,176 @@
+# Default values for MemoBuild Helm chart
+
+replicaCount: 3
+replicationFactor: 2
+
+image:
+  repository: ghcr.io/nrelab/memobuild
+  tag: "0.4.1"
+  pullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9090"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: memobuild.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 2
+    memory: 4Gi
+
+nodeSelector: {}
+tolerations: []
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchLabels:
+            app: memobuild
+        topologyKey: kubernetes.io/hostname
+
+## Storage Configuration
+storage:
+  backend: s3  # s3, gcs, or local
+  s3:
+    bucket: memobuild-cache
+    endpoint: ""
+    region: us-east-1
+    pathStyle: false
+  gcs:
+    bucket: memobuild-cache
+    projectId: ""
+  local:
+    path: /data/memobuild
+
+## TLS Configuration
+tls:
+  enabled: false
+  certManager:
+    enabled: false
+    issuerRef: {}
+  secretName: memobuild-tls
+
+## PostgreSQL Configuration
+postgresql:
+  enabled: true
+  host: postgres
+  port: 5432
+  database: memobuild
+  user: memobuild
+  secretName: memobuild-postgres
+  existingSecret: ""
+
+## Redis Configuration
+redis:
+  enabled: true
+  host: redis
+  port: 6379
+  secretName: memobuild-redis
+  existingSecret: ""
+
+## Autoscaling Configuration
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+## Monitoring Configuration
+monitoring:
+  enabled: true
+  prometheus:
+    serviceMonitor:
+      enabled: true
+      interval: 30s
+  grafana:
+    dashboards:
+      enabled: true
+
+## Custom environment variables
+env:
+  MEMOBUILD_LOG_LEVEL: info
+  MEMOBUILD_GC_INTERVAL_HOURS: "6"
+  MEMOBUILD_MAX_CONCURRENT_BUILDS: "10"
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+
+## Network Policy
+networkPolicy:
+  enabled: true
+  egressTo:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+
+## Pod Disruption Budget
+pdb:
+  enabled: true
+  minAvailable: 2
+
+## Priority Class
+priorityClass:
+  enabled: true
+  value: 1000000
+
+## Operator (if deploying the operator separately)
+operator:
+  enabled: false
+  image:
+    repository: ghcr.io/nrelab/memobuild-operator
+    tag: "0.4.1"

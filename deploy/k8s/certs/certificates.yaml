@@ -1,0 +1,39 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: memobuild-selfsigned
+  namespace: memobuild
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: memobuild-server
+  namespace: memobuild
+spec:
+  secretName: memobuild-server-tls
+  issuerRef:
+    name: memobuild-selfsigned
+    kind: Issuer
+  commonName: memobuild
+  dnsNames:
+  - memobuild
+  - memobuild.memobuild.svc
+  - memobuild.memobuild.svc.cluster.local
+  duration: 2160h # 90 days
+  renewBefore: 360h # 15 days
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: memobuild-client
+  namespace: memobuild
+spec:
+  secretName: memobuild-client-tls
+  issuerRef:
+    name: memobuild-selfsigned
+    kind: Issuer
+  commonName: memobuild-client
+  duration: 2160h
+  renewBefore: 360h

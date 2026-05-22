@@ -11,7 +11,7 @@ use crate::graph::BuildGraph;
 use anyhow::Result;
 use std::path::PathBuf;
 
-pub fn export_image(graph: &BuildGraph, image_name: &str) -> Result<PathBuf> {
+pub fn export_image(graph: &BuildGraph, image_name: &str, reproducible: bool) -> Result<PathBuf> {
     let output_dir = PathBuf::from(".memobuild-output").join(image_name.replace(':', "-"));
 
     let mut exporter = OciExporter::new(&output_dir);
@@ -22,5 +22,5 @@ pub fn export_image(graph: &BuildGraph, image_name: &str) -> Result<PathBuf> {
         exporter.add_layer(layer_info)?;
     }
 
-    exporter.write_manifest(graph)
+    exporter.write_manifest(graph, reproducible)
 }

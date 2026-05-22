@@ -1,0 +1,9 @@
+{
+    "name": "monorepo-api",
+    "version": "1.0.0",
+    "description": "API service",
+    "main": "api.js",
+    "scripts": {
+        "start": "node api.js"
+    }
+}

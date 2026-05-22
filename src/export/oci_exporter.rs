@@ -31,13 +31,17 @@ impl OciExporter {
         Ok(())
     }
 
-    pub fn write_manifest(&self, graph: &crate::graph::BuildGraph) -> Result<PathBuf> {
+    pub fn write_manifest(
+        &self,
+        graph: &crate::graph::BuildGraph,
+        reproducible: bool,
+    ) -> Result<PathBuf> {
         fs::create_dir_all(&self.output_dir)?;
         let blobs_dir = self.output_dir.join("blobs").join("sha256");
         fs::create_dir_all(&blobs_dir)?;
 
         // 1. Create config
-        let oci_config = config::create_config(graph, &self.layers);
+        let oci_config = config::create_config(graph, &self.layers, reproducible);
         let config_json = serde_json::to_string_pretty(&oci_config)?;
         let config_digest = format!("sha256:{}", utils::sha256_string(&config_json));
 

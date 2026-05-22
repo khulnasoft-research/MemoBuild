@@ -18,7 +18,11 @@ RUN npm run build
     println!("📋 Parsed {} instructions:", instructions.len());
 
     // Build graph
-    let graph = docker::dag::build_graph_from_instructions(instructions);
+    // Build graph
+    let graph = docker::dag::build_graph_from_instructions(
+        instructions,
+        std::env::current_dir().unwrap_or_default(),
+    );
     println!("📊 Created graph with {} nodes", graph.nodes.len());
 
     // Display node details
@@ -76,7 +80,11 @@ RUN npm run build
         println!("  ❌ Same node should produce same key");
     }
 
-    let copy_key = graph.nodes[copy_package_idx].compute_node_key(&[from_key1.clone()], None, None);
+    let copy_key = graph.nodes[copy_package_idx].compute_node_key(
+        std::slice::from_ref(&from_key1),
+        None,
+        None,
+    );
     if from_key1 != copy_key {
         println!("  ✅ Different nodes produce different keys");
         println!("    FROM: {}...", &from_key1[..16]);

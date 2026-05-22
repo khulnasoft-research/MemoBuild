@@ -1,35 +1,91 @@
-name: MemoBuild CI
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ main ]
+    branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build_and_test:
-    name: Build and Test
+  format:
+    name: Format Code
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-
+      - name: Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - name: Check Formatting
-        run: cargo fmt -- --check
+        run: cargo fmt --all -- --check
 
-      - name: Clippy
-        run: cargo clippy --features server -- -D warnings
+  clippy:
+    name: Lint / Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: Build (Default)
-        run: cargo build --verbose
+  test:
+    name: Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Run Tests
+        run: cargo test --all-features -- --nocapture
 
-      - name: Build (With Server)
-        run: cargo build --verbose --features server
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: Run Audit
+        run: cargo audit
 
-      - name: Run Tests (All)
-        run: cargo test --verbose --features server
+  build:
+    name: Build Multi-Platform
+    needs: [format, clippy, test, security]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Build Release
+        run: cargo build --verbose --release

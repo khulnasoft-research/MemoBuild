@@ -6,8 +6,6 @@ use std::fs;
 #[cfg(feature = "server")]
 use std::sync::Arc;
 #[cfg(feature = "server")]
-use std::thread;
-#[cfg(feature = "server")]
 use std::time::Duration;
 #[cfg(feature = "server")]
 use tempfile::tempdir;
@@ -24,7 +22,10 @@ RUN npm run build
 "#;
 
     let instructions = docker::parser::parse_dockerfile(dockerfile_content);
-    let graph = docker::dag::build_graph_from_instructions(instructions);
+    let graph = docker::dag::build_graph_from_instructions(
+        instructions,
+        std::env::current_dir().unwrap_or_default(),
+    );
 
     // Verify we have 5 nodes
     assert_eq!(graph.nodes.len(), 5, "Should have 5 nodes");
@@ -63,7 +64,10 @@ RUN npm install --only=production
 "#;
 
     let instructions = docker::parser::parse_dockerfile(dockerfile_content);
-    let graph = docker::dag::build_graph_from_instructions(instructions);
+    let graph = docker::dag::build_graph_from_instructions(
+        instructions,
+        std::env::current_dir().unwrap_or_default(),
+    );
 
     // Get execution levels
     let levels = graph.levels();
@@ -131,7 +135,10 @@ RUN npm install
 "#;
 
     let instructions = docker::parser::parse_dockerfile(dockerfile_content);
-    let graph = docker::dag::build_graph_from_instructions(instructions);
+    let graph = docker::dag::build_graph_from_instructions(
+        instructions,
+        std::env::current_dir().unwrap_or_default(),
+    );
 
     // Compute node keys
     let dep_hashes: Vec<String> = vec![]; // No dependencies for FROM node
@@ -142,7 +149,7 @@ RUN npm install
     assert_eq!(from_key1, from_key2, "Same node should produce same key");
 
     // Different nodes should produce different keys
-    let copy_key = graph.nodes[1].compute_node_key(&[from_key1.clone()], None, None);
+    let copy_key = graph.nodes[1].compute_node_key(std::slice::from_ref(&from_key1), None, None);
     assert_ne!(
         from_key1, copy_key,
         "Different nodes should produce different keys"
@@ -177,7 +184,7 @@ async fn test_end_to_end_build_with_remote_cache() {
     let port = 9991;
     let server_path_clone = server_path.clone();
     tokio::spawn(async move {
-        server::start_server(port, server_path_clone, None)
+        server::start_server(port, server_path_clone, None, None, None, None)
             .await
             .ok();
     });
@@ -209,7 +216,10 @@ async fn test_end_to_end_build_with_remote_cache() {
     // 6. Run First Build (Populate Cache)
     let dockerfile_content = "FROM alpine\nRUN echo 'hello world' > hello.txt";
     let instructions = docker::parser::parse_dockerfile(dockerfile_content);
-    let mut graph = docker::dag::build_graph_from_instructions(instructions);
+    let mut graph = docker::dag::build_graph_from_instructions(
+        instructions,
+        std::env::current_dir().unwrap_or_default(),
+    );
 
     core::detect_changes(&mut graph);
     core::propagate_dirty(&mut graph);
@@ -224,7 +234,10 @@ async fn test_end_to_end_build_with_remote_cache() {
     fs::create_dir_all(&client_path).unwrap();
 
     let instructions2 = docker::parser::parse_dockerfile(dockerfile_content);
-    let mut graph2 = docker::dag::build_graph_from_instructions(instructions2);
+    let mut graph2 = docker::dag::build_graph_from_instructions(
+        instructions2,
+        std::env::current_dir().unwrap_or_default(),
+    );
 
     core::detect_changes(&mut graph2);
     core::propagate_dirty(&mut graph2);

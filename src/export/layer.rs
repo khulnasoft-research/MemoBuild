@@ -1,7 +1,7 @@
 use crate::export::utils::{sha256_bytes, sha256_string};
 use crate::graph::Node;
 use anyhow::Result;
-use flate2::write::GzEncoder;
+
 use flate2::Compression;
 use std::fs::{self, File};
 use std::path::Path;
@@ -22,7 +22,10 @@ pub fn create_layer_tar(output_dir: &Path, node: &Node) -> Result<LayerInfo> {
     let layer_path = layers_dir.join(&layer_filename);
 
     let file = File::create(&layer_path)?;
-    let encoder = GzEncoder::new(file, Compression::default());
+    // Use GzBuilder to fix gzip header mtime to 0 for reproducibility
+    let encoder = flate2::GzBuilder::new()
+        .mtime(0)
+        .write(file, Compression::default());
     let mut tar = Builder::new(encoder);
 
     // For now, we add a marker file representing the layer content.
@@ -34,6 +37,9 @@ pub fn create_layer_tar(output_dir: &Path, node: &Node) -> Result<LayerInfo> {
     let mut header = tar::Header::new_gnu();
     header.set_size(content.len() as u64);
     header.set_mode(0o644);
+    header.set_mtime(0);
+    header.set_uid(0);
+    header.set_gid(0);
     header.set_cksum();
 
     tar.append_data(

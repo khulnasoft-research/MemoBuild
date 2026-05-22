@@ -11,9 +11,10 @@ use std::path::PathBuf;
 /// - RUN commands depend on preceding COPY operations for their sources
 /// - Multi-stage builds and conditional branching support
 /// - Content-addressed identities for incremental builds
-pub fn build_graph_from_instructions(instructions: Vec<Instruction>) -> BuildGraph {
-    let project_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
+pub fn build_graph_from_instructions(
+    instructions: Vec<Instruction>,
+    project_root: PathBuf,
+) -> BuildGraph {
     let mut nodes: Vec<Node> = Vec::new();
     let mut copy_sources: HashMap<String, usize> = HashMap::new(); // Track COPY operations by source
     let mut env_vars: HashMap<String, String> = HashMap::new(); // Track environment variables

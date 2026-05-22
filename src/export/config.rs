@@ -37,13 +37,19 @@ pub struct OCIHistory {
     pub empty_layer: Option<bool>,
 }
 
-pub fn create_config(graph: &BuildGraph, layers: &[LayerInfo]) -> OCIConfig {
+pub fn create_config(graph: &BuildGraph, layers: &[LayerInfo], reproducible: bool) -> OCIConfig {
     let mut env = Vec::new();
     for node in &graph.nodes {
         for (k, v) in &node.env {
             env.push(format!("{}={}", k, v));
         }
     }
+
+    let timestamp = if reproducible {
+        "1970-01-01T00:00:00Z".to_string()
+    } else {
+        Utc::now().to_rfc3339()
+    };
 
     OCIConfig {
         architecture: "amd64".to_string(),
@@ -61,7 +67,7 @@ pub fn create_config(graph: &BuildGraph, layers: &[LayerInfo]) -> OCIConfig {
             .nodes
             .iter()
             .map(|n| OCIHistory {
-                created: Utc::now().to_rfc3339(),
+                created: timestamp.clone(),
                 created_by: format!("MemoBuild: {}", n.name),
                 empty_layer: Some(false),
             })

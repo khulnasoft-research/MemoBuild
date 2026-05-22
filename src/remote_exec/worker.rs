@@ -61,7 +61,7 @@ impl RemoteExecutor for WorkerNode {
             .await
         {
             if let Ok(manifest) =
-                serde_json::from_slice::<crate::cache_utils::ArtifactManifest>(&manifest_data)
+                serde_json::from_slice::<crate::cache_utils_exe::ArtifactManifest>(&manifest_data)
             {
                 println!(
                     "   📥 [Worker {}] Reconstructing {} files...",

@@ -6,6 +6,10 @@ use std::time::Duration;
 
 pub mod client;
 pub mod scheduler;
+#[cfg(feature = "remote-exec")]
+pub mod grpc_server;
+#[cfg(feature = "remote-exec")]
+pub mod reapi;
 #[cfg(any(feature = "server", feature = "remote-exec"))]
 pub mod server;
 pub mod worker;

@@ -1,0 +1,63 @@
+groups:
+  - name: memobuild.rules
+    rules:
+      - alert: CacheNodeDown
+        expr: up{job="memobuild-nodes"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MemoBuild cache node {{ $labels.instance }} is down"
+          description: "MemoBuild cache node {{ $labels.instance }} has been unhealthy for more than 2 minutes"
+
+      - alert: ReplicationLagHigh
+        expr: memobuild_replication_lag_seconds > 30
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High replication lag on {{ $labels.node_id }}"
+          description: "Replication lag is {{ $value }}s on node {{ $labels.node_id }}"
+
+      - alert: BuildQueueSaturated
+        expr: memobuild_active_builds > 500
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Build queue saturated"
+          description: "Queued builds exceed 500 for more than 5 minutes"
+
+      - alert: DiskUsageHigh
+        expr: (1 - node_filesystem_avail_bytes{mountpoint="/cache"} / node_filesystem_size_bytes{mountpoint="/cache"}) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage on cache partition"
+          description: "Cache partition disk usage is {{ $value | humanizePercentage }}"
+
+      - alert: ErrorRateHigh
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High HTTP error rate"
+          description: "HTTP 5xx error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value }}% on {{ $labels.instance }}"
+
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value }}% on {{ $labels.instance }}"

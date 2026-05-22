@@ -1,6 +1,7 @@
 use crate::remote_exec::{ActionRequest, ActionResult, RemoteExecutor};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -13,50 +14,65 @@ pub enum SchedulingStrategy {
 }
 
 pub struct Scheduler {
-    workers: Vec<Arc<dyn RemoteExecutor>>,
     strategy: SchedulingStrategy,
-    next_worker: Mutex<usize>,
+    worker_endpoints: Arc<Mutex<HashMap<String, String>>>, // worker_id -> endpoint
+    next_worker_idx: Mutex<usize>,
 }
 
 impl Scheduler {
-    pub fn new(workers: Vec<Arc<dyn RemoteExecutor>>, strategy: SchedulingStrategy) -> Self {
+    pub fn new(strategy: SchedulingStrategy) -> Self {
         Self {
-            workers,
             strategy,
-            next_worker: Mutex::new(0),
+            worker_endpoints: Arc::new(Mutex::new(HashMap::new())),
+            next_worker_idx: Mutex::new(0),
         }
     }
 
-    async fn select_worker(&self, action: &ActionRequest) -> Result<Arc<dyn RemoteExecutor>> {
-        if self.workers.is_empty() {
-            return Err(anyhow!("No available workers in the build farm"));
+    pub async fn register_worker(&self, worker_id: String, endpoint: String) {
+        let mut endpoints = self.worker_endpoints.lock().await;
+        endpoints.insert(worker_id.clone(), endpoint);
+        println!("📝 Scheduler registered worker: {}", worker_id);
+    }
+
+    pub async fn get_available_workers(&self) -> Vec<(String, String)> {
+        let endpoints = self.worker_endpoints.lock().await;
+        endpoints
+            .iter()
+            .map(|(id, endpoint)| (id.clone(), endpoint.clone()))
+            .collect()
+    }
+
+    async fn select_worker(&self, action: &ActionRequest) -> Result<String> {
+        let workers = self.get_available_workers().await;
+        if workers.is_empty() {
+            return Err(anyhow!("No available workers registered with scheduler"));
         }
 
         match self.strategy {
             SchedulingStrategy::Random => {
                 use rand::Rng;
-                let idx = rand::thread_rng().gen_range(0..self.workers.len());
-                Ok(self.workers[idx].clone())
+                let idx = rand::thread_rng().gen_range(0..workers.len());
+                Ok(workers[idx].1.clone())
             }
             SchedulingStrategy::RoundRobin => {
-                let mut next = self.next_worker.lock().await;
-                let worker = self.workers[*next].clone();
-                *next = (*next + 1) % self.workers.len();
-                Ok(worker)
+                let mut next = self.next_worker_idx.lock().await;
+                let worker = &workers[*next % workers.len()];
+                *next += 1;
+                Ok(worker.1.clone())
             }
             SchedulingStrategy::LeastLoaded => {
-                // For MVP, we fallback to RoundRobin unless we track load
-                let mut next = self.next_worker.lock().await;
-                let worker = self.workers[*next].clone();
-                *next = (*next + 1) % self.workers.len();
-                Ok(worker)
+                // For MVP, fallback to RoundRobin
+                let mut next = self.next_worker_idx.lock().await;
+                let worker = &workers[*next % workers.len()];
+                *next += 1;
+                Ok(worker.1.clone())
             }
             SchedulingStrategy::DataLocality => {
                 // Consistent hashing based on input root digest
                 let hash_val = blake3::hash(action.input_root_digest.hash.as_bytes());
                 let bytes = hash_val.as_bytes();
-                let idx = (bytes[0] as usize + ((bytes[1] as usize) << 8)) % self.workers.len();
-                Ok(self.workers[idx].clone())
+                let idx = (bytes[0] as usize + ((bytes[1] as usize) << 8)) % workers.len();
+                Ok(workers[idx].1.clone())
             }
         }
     }
@@ -65,7 +81,11 @@ impl Scheduler {
 #[async_trait]
 impl RemoteExecutor for Scheduler {
     async fn execute(&self, action: ActionRequest) -> Result<ActionResult> {
-        let worker = self.select_worker(&action).await?;
-        worker.execute(action).await
+        let worker_endpoint = self.select_worker(&action).await?;
+        println!("🎯 Dispatching action to worker: {}", worker_endpoint);
+
+        // Create a client executor for the selected worker
+        let client = crate::remote_exec::client::RemoteExecClient::new(&worker_endpoint);
+        client.execute(action).await
     }
 }

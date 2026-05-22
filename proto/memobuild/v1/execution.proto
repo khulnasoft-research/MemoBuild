@@ -1,0 +1,197 @@
+syntax = "proto3";
+
+package memobuild.v1;
+
+option go_package = "github.com/nrelab/memobuild/genproto/memobuild/v1;memobuild";
+
+service ExecutionService {
+  // Execute a build action
+  rpc Execute(ExecuteRequest) returns (stream ExecuteResponse);
+  
+  // Wait for execution to complete (reconnect support)
+  rpc WaitExecution(WaitExecutionRequest) returns (stream ExecuteResponse);
+  
+  // Get execution stream metadata
+  rpc GetExecutionStreamInfo(GetExecutionStreamInfoRequest) returns (GetExecutionStreamInfoResponse);
+}
+
+service CacheService {
+  // Get action result from cache
+  rpc GetActionResult(GetActionResultRequest) returns (ActionResult);
+  
+  // Store action result in cache
+  rpc UpdateActionResult(UpdateActionResultRequest) returns (UpdateActionResultResponse);
+  
+  // Find missing blobs
+  rpc FindMissingBlobs(FindMissingBlobsRequest) returns (FindMissingBlobsResponse);
+  
+  // Batch read blobs
+  rpc BatchReadBlobs(BatchReadBlobsRequest) returns (stream BatchReadBlobsResponse);
+  
+  // Batch update blobs
+  rpc BatchUpdateBlobs(BatchUpdateBlobsRequest) returns (BatchUpdateBlobsResponse);
+  
+  // Get tree (directory structure)
+  rpc GetTree(GetTreeRequest) returns (GetTreeResponse);
+}
+
+message ExecuteRequest {
+  string action_digest = 1;
+  ExecuteMetadata metadata = 2;
+}
+
+message ExecuteMetadata {
+  string invocation_id = 1;
+  string tool_invocation_id = 2;
+  string tool_name = 3;
+  string tool_version = 4;
+  repeated KeyValue action_properties = 5;
+  repeated KeyValue environment_variables = 6;
+  string working_directory = 7;
+}
+
+message KeyValue {
+  string key = 1;
+  string value = 2;
+}
+
+message ExecuteResponse {
+  message Stdout {
+    bytes data = 1;
+  }
+  message Stderr {
+    bytes data = 1;
+  }
+  message ExitCode {
+    int32 exit_code = 1;
+  }
+  message Platform {
+    string os = 1;
+    string arch = 2;
+  }
+  message ExecutionMetadata {
+    string worker = 1;
+    int64 queued_duration_ns = 2;
+    int64 worker_start_timestamp_ns = 3;
+    int64 worker_completed_timestamp_ns = 4;
+    int64 input_fetch_duration_ns = 5;
+    int64 output_upload_duration_ns = 6;
+  }
+
+  oneof output {
+    Stdout stdout = 1;
+    Stderr stderr = 2;
+    ExitCode exit_code = 3;
+    Platform platform = 4;
+    ExecutionMetadata execution_metadata = 5;
+  }
+}
+
+message WaitExecutionRequest {
+  string operation_name = 1;
+}
+
+message GetExecutionStreamInfoRequest {
+  string operation_name = 1;
+}
+
+message GetExecutionStreamInfoResponse {
+  string operation_name = 1;
+  bool done = 2;
+  string error = 3;
+  ActionResult result = 4;
+}
+
+message GetActionResultRequest {
+  string action_digest = 1;
+}
+
+message ActionResult {
+  message StdoutFile {
+    string digest = 1;
+    int64 size = 2;
+  }
+  message StderrFile {
+    string digest = 1;
+    int64 size = 2;
+  }
+  
+  string action_digest = 1;
+  int32 exit_code = 2;
+  StdoutFile stdout = 3;
+  StderrFile stderr = 4;
+  ExecutionInfo execution_info = 5;
+  MessageCacheInfo message_cache_info = 6;
+}
+
+message ExecutionInfo {
+  int64 input_fetch_completed_timestamp = 1;
+  int64 execution_completed_timestamp = 2;
+  string execution_worker = 3;
+}
+
+message MessageCacheInfo {
+  int64 cache_hit = 1;
+  string action_digest = 2;
+  int64 message_size = 3;
+}
+
+message UpdateActionResultRequest {
+  ActionResult action_result = 1;
+}
+
+message UpdateActionResultResponse {
+  bool ok = 1;
+}
+
+message FindMissingBlobsRequest {
+  repeated string blob_digests = 1;
+}
+
+message FindMissingBlobsResponse {
+  repeated string missing_blob_digests = 1;
+}
+
+message BatchReadBlobsRequest {
+  repeated string blob_digests = 1;
+}
+
+message BatchReadBlobsResponse {
+  Blob blob = 1;
+}
+
+message Blob {
+  string digest = 1;
+  bytes data = 2;
+}
+
+message BatchUpdateBlobsRequest {
+  repeated Blob blobs = 1;
+}
+
+message BatchUpdateBlobsResponse {
+  repeated BlobDigest blob_digests = 1;
+}
+
+message BlobDigest {
+  string digest = 1;
+  bool already_cached = 2;
+}
+
+message GetTreeRequest {
+  string root_digest = 1;
+  string path_prefix = 2;
+  bool recursive = 3;
+}
+
+message GetTreeResponse {
+  message FileNode {
+    string name = 1;
+    bool is_directory = 2;
+    string digest = 3;
+    int64 size = 4;
+  }
+  
+  repeated FileNode children = 1;
+  string next_page_token = 2;
+}

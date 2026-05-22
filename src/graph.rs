@@ -68,6 +68,8 @@ pub struct NodeMetadata {
     pub input_manifest_hash: Option<String>,
     /// Hash of the ArtifactManifest for outputs (what this node produced)
     pub output_manifest_hash: Option<String>,
+    /// AI-detected extra dependencies (source paths)
+    pub extra_source_paths: Vec<std::path::PathBuf>,
 }
 
 impl Node {

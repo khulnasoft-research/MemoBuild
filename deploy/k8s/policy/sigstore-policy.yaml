@@ -1,0 +1,36 @@
+apiVersion: policy.sigstore.dev/v1beta1
+kind: ClusterImagePolicy
+metadata:
+  name: memobuild-images
+  annotations:
+    description: "Policy for MemoBuild images - requires Cosign signatures"
+spec:
+  images:
+  - glob: "ghcr.io/nrelab/memobuild/*"
+  - glob: "docker.io/nrelab/memobuild/*"
+  - glob: "registry.internal/memobuild/*"
+  authorities:
+  # Keyless verification (Fulcio + Rekor)
+  - keyless:
+      url: https://fulcio.sigstore.dev
+      identity:
+        issuer: "https://issuer.example.com"
+        subject: ".*@nrelab.io"
+    ctlog:
+      url: https://rekor.sigstore.dev
+  # Public key fallback
+  - key:
+      data: |
+        -----BEGIN PUBLIC KEY-----
+        # Add your Cosign public key here
+        -----END PUBLIC KEY-----
+  # GitHub Actions OIDC
+  - keyless:
+      url: https://fulcio.sigstore.dev
+      identity:
+        issuer: "https://token.actions.githubusercontent.com"
+        subject: "https://github.com/nrelab/MemoBuild/*"
+    ctlog:
+      url: https://rekor.sigstore.dev
+  mode: enforce
+  requireEphemeralOnReboot: false

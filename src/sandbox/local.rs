@@ -4,16 +4,21 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::process::Command;
 
-pub struct LocalSandbox;
+pub struct LocalSandbox {
+    pub workspace_dir: std::path::PathBuf,
+}
+
+impl LocalSandbox {
+    pub fn new(workspace_dir: std::path::PathBuf) -> Self {
+        Self { workspace_dir }
+    }
+}
 
 #[async_trait]
 impl Sandbox for LocalSandbox {
     async fn prepare(&self, node: &Node) -> Result<SandboxEnv> {
-        // Local sandbox uses the current working directory but can isolate via temp dirs
-        let workspace_dir = std::env::current_dir()?;
-
         Ok(SandboxEnv {
-            workspace_dir,
+            workspace_dir: self.workspace_dir.clone(),
             env_vars: node.env.clone(),
         })
     }

@@ -1,5 +1,6 @@
 use crate::server::metadata::MetadataStore;
 use crate::server::storage::{ArtifactStorage, LocalStorage};
+use crate::storage::storage_from_env;
 use anyhow::Result;
 use axum::{
     body::Bytes,
@@ -7,8 +8,9 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
     },
-    http::StatusCode,
-    response::{Html, IntoResponse},
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Response},
     routing::{get, head, post, put},
     Json, Router,
 };
@@ -18,6 +20,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+// use tower_governor::GovernorLayer;
 
 pub mod metadata;
 pub mod storage;
@@ -28,6 +31,8 @@ pub struct AppState {
     pub webhook_url: Option<String>,
     pub tx_events: broadcast::Sender<crate::dashboard::BuildEvent>,
     pub current_dag: Arc<std::sync::Mutex<Option<crate::graph::BuildGraph>>>,
+    pub auth_state: Arc<crate::auth::AuthState>,
+    pub metrics: crate::metrics::SharedMetrics,
 }
 
 #[derive(Deserialize)]
@@ -42,13 +47,35 @@ pub struct AnalyticsData {
     pub duration_ms: u64,
 }
 
-pub async fn start_server(port: u16, data_dir: PathBuf, webhook_url: Option<String>) -> Result<()> {
+async fn add_api_version_header<B>(req: Request<B>, next: Next<B>) -> Response {
+    let mut response = next.run(req).await;
+    response.headers_mut().insert(
+        "X-MemoBuild-API-Version",
+        axum::http::HeaderValue::from_static("1.0"),
+    );
+    response
+}
+
+pub async fn start_server(
+    port: u16,
+    data_dir: PathBuf,
+    webhook_url: Option<String>,
+    tls_config: Option<crate::tls::TlsConfig>,
+    admin_token: Option<String>,
+    auth_db_client: Option<tokio_postgres::Client>,
+) -> Result<()> {
     let db_path = data_dir.join("metadata.db");
     let metadata = MetadataStore::new(&db_path)?;
-    let storage = Arc::new(LocalStorage::new(&data_dir)?);
+    let storage: Arc<dyn ArtifactStorage> = match storage_from_env(&data_dir) {
+        Ok(s) => Arc::from(s),
+        Err(_) => Arc::new(LocalStorage::new(&data_dir)?),
+    };
 
-    let (tx_events, _) = broadcast::channel(100);
+    let (tx_events, _) = broadcast::channel(crate::constants::MAX_WS_BROADCAST_CAPACITY);
     let current_dag = Arc::new(std::sync::Mutex::new(None));
+
+    let auth_state = Arc::new(crate::auth::AuthState::new(admin_token, auth_db_client));
+    let metrics = crate::metrics::metrics_registry();
 
     let state = Arc::new(AppState {
         metadata,
@@ -56,6 +83,8 @@ pub async fn start_server(port: u16, data_dir: PathBuf, webhook_url: Option<Stri
         webhook_url,
         tx_events,
         current_dag,
+        auth_state,
+        metrics,
     });
 
     let app = Router::new()
@@ -70,6 +99,8 @@ pub async fn start_server(port: u16, data_dir: PathBuf, webhook_url: Option<Stri
         .route("/cache/node/:hash/layers", get(get_node_layers))
         .route("/cache/node/:hash/layers", post(register_node_layers))
         .route("/gc", post(gc_cache))
+        .route("/gc/status", get(gc_status))
+        .route("/metrics", get(metrics_handler))
         .route("/analytics", post(report_analytics))
         .route("/build-event", post(receive_build_event))
         .route("/dag", post(register_dag))
@@ -77,14 +108,24 @@ pub async fn start_server(port: u16, data_dir: PathBuf, webhook_url: Option<Stri
         .route("/api/analytics", get(get_analytics_handler))
         .route("/api/layers", get(get_layer_stats_handler))
         .route("/ws", get(ws_handler))
+        .layer(middleware::from_fn(add_api_version_header))
+        // Add auth routes
+        
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     println!("🌐 MemoBuild Remote Cache Server running on {}", addr);
 
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await?;
+    if let Some(tls) = tls_config {
+        let rustls_config = tls.axum_rustls_config()?;
+        axum_server::bind_rustls(addr, rustls_config)
+            .serve(app.into_make_service())
+            .await?;
+    } else {
+        axum::Server::bind(&addr)
+            .serve(app.into_make_service())
+            .await?;
+    }
 
     Ok(())
 }
@@ -148,7 +189,10 @@ async fn get_dag(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 async fn get_analytics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match state.metadata.get_analytics(50) {
+    match state
+        .metadata
+        .get_analytics(crate::constants::ANALYTICS_DB_LIMIT as u32)
+    {
         Ok(data) => (StatusCode::OK, Json(data)).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -477,20 +521,19 @@ async fn put_artifact(
     State(state): State<Arc<AppState>>,
     body: Bytes,
 ) -> impl IntoResponse {
-    // 1. CAS Verification: Verify hash of the body match requested hash
-    // (Note: In a true CAS, the hash *is* the content, so we verify it here)
-    // We assume the hash provided in URL is the expected BLAKE3 hash.
+    // 1. CAS Verification: Verify hash of the body matches requested hash
     let mut hasher = blake3::Hasher::new();
     hasher.update(&body);
     let actual_hash = hasher.finalize().to_hex().to_string();
 
     if actual_hash != hash {
-        eprintln!(
-            "CAS integrity failure: expected {}, got {}",
-            hash, actual_hash
-        );
-        // We might want to be strict here, but let's just log for now or return error
-        // return StatusCode::BAD_REQUEST;
+        let err = crate::error::MemoBuildError::CASIntegrityFailure {
+            expected: hash.clone(),
+            actual: actual_hash.clone(),
+            data_size: body.len(),
+        };
+        eprintln!("❌ {}", err);
+        return StatusCode::BAD_REQUEST;
     }
 
     let size = body.len() as u64;
@@ -557,6 +600,22 @@ async fn gc_cache(
     }
 }
 
+async fn gc_status() -> impl IntoResponse {
+    let gc = crate::gc::GarbageCollector::from_env();
+    let status = gc.status().await;
+    (StatusCode::OK, Json(status)).into_response()
+}
+
+async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let metrics = state.metrics.read().await;
+    let output = metrics.encode();
+    (
+        StatusCode::OK,
+        axum::response::AppendHeaders([(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")]),
+        output,
+    ).into_response()
+}
+
 async fn check_layer(
     Path(hash): Path<String>,
     State(state): State<Arc<AppState>>,
@@ -590,17 +649,19 @@ async fn put_layer(
     State(state): State<Arc<AppState>>,
     body: Bytes,
 ) -> impl IntoResponse {
-    // CAS Verification
+    // CAS Verification: Strict enforcement for layer integrity
     let mut hasher = blake3::Hasher::new();
     hasher.update(&body);
     let actual_hash = hasher.finalize().to_hex().to_string();
 
     if actual_hash != hash {
-        eprintln!(
-            "CAS integrity failure in layer: expected {}, got {} (Expected if body is compressed or composite hash used)",
-            hash, actual_hash
-        );
-        // return StatusCode::BAD_REQUEST;
+        let err = crate::error::MemoBuildError::CASIntegrityFailure {
+            expected: hash.clone(),
+            actual: actual_hash.clone(),
+            data_size: body.len(),
+        };
+        eprintln!("❌ {}", err);
+        return StatusCode::BAD_REQUEST;
     }
 
     let size = body.len() as u64;

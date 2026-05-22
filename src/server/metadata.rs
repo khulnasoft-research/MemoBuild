@@ -1,7 +1,25 @@
 use anyhow::Result;
+use async_trait::async_trait;
 use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::Mutex;
+
+#[async_trait]
+pub trait MetadataStoreTrait: Send + Sync {
+    async fn insert(&self, hash: &str, path: &str, size: u64) -> Result<()>;
+    async fn insert_layered_node(
+        &self,
+        hash: &str,
+        size: u64,
+        layer_hashes: &[String],
+    ) -> Result<()>;
+    async fn insert_layer(&self, hash: &str, path: &str, size: u64) -> Result<()>;
+    async fn get_node_layers(&self, hash: &str) -> Result<Option<Vec<String>>>;
+    async fn layer_exists(&self, hash: &str) -> Result<bool>;
+    async fn get_layer_path(&self, hash: &str) -> Result<Option<String>>;
+    async fn get(&self, hash: &str) -> Result<Option<CacheEntry>>;
+    async fn cleanup_old_entries(&self, days: u32) -> Result<i64>;
+}
 
 #[derive(Debug, Clone)]
 pub struct CacheEntry {
@@ -348,6 +366,51 @@ impl MetadataStore {
             results.push(row?);
         }
         Ok(results)
+    }
+}
+
+#[async_trait]
+impl MetadataStoreTrait for MetadataStore {
+    async fn insert(&self, hash: &str, path: &str, size: u64) -> Result<()> {
+        MetadataStore::insert(self, hash, path, size)
+    }
+
+    async fn insert_layered_node(
+        &self,
+        hash: &str,
+        size: u64,
+        layer_hashes: &[String],
+    ) -> Result<()> {
+        MetadataStore::insert_layered_node(self, hash, size, layer_hashes)
+    }
+
+    async fn insert_layer(&self, hash: &str, path: &str, size: u64) -> Result<()> {
+        MetadataStore::insert_layer(self, hash, path, size)
+    }
+
+    async fn get_node_layers(&self, hash: &str) -> Result<Option<Vec<String>>> {
+        MetadataStore::get_node_layers(self, hash)
+    }
+
+    async fn layer_exists(&self, hash: &str) -> Result<bool> {
+        MetadataStore::layer_exists(self, hash)
+    }
+
+    async fn get_layer_path(&self, hash: &str) -> Result<Option<String>> {
+        MetadataStore::get_layer_path(self, hash)
+    }
+
+    async fn get(&self, hash: &str) -> Result<Option<CacheEntry>> {
+        MetadataStore::get(self, hash)
+    }
+
+    async fn cleanup_old_entries(&self, days: u32) -> Result<i64> {
+        let entries = MetadataStore::get_old_entries(self, days)?;
+        let count = entries.len() as i64;
+        for hash in entries {
+            MetadataStore::delete(self, &hash)?;
+        }
+        Ok(count)
     }
 }
 

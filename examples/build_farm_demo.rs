@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 1. Setup Shared Cache
     let cache = Arc::new(HybridCache::new(None)?);
-    let sandbox = Arc::new(LocalSandbox);
+    let sandbox = Arc::new(LocalSandbox::new(std::env::current_dir()?));
 
     // 2. Spawn 3 Worker Nodes
     let mut workers: Vec<Arc<dyn RemoteExecutor>> = Vec::new();
@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 3. Initialize Scheduler with Data Locality
-    let shared_scheduler = Arc::new(Scheduler::new(workers, SchedulingStrategy::DataLocality));
+    let shared_scheduler = Arc::new(Scheduler::new(SchedulingStrategy::DataLocality));
     println!("   🚀 Scheduler running with DataLocality strategy\n");
 
     // 4. Dispatch tasks with some shared hashes to test Data Locality

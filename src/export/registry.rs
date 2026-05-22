@@ -34,6 +34,8 @@ impl RegistryClient {
 
     /// Push an OCI layout directory to the registry
     pub fn push(&self, layout_dir: &Path) -> Result<()> {
+        let _span = crate::oci_span!("push", &self.base_url, 0); // layer_count will be updated
+
         println!("🚀 Pushing image to {}/{}...", self.base_url, self.repo);
 
         // 1. Read index.json to find the manifest
@@ -197,7 +199,7 @@ impl RegistryClient {
         // Re-construct the URL if it's relative
         let final_url = if location.starts_with('/') {
             // Extract host from base_url
-            let host = self.base_url.split("/v2").next().unwrap();
+            let host = self.base_url.split("/v2").next().unwrap_or(&self.base_url);
             format!("{}{}&digest={}", host, location, digest)
         } else {
             format!("{}&digest={}", location, digest)

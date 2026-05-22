@@ -4,12 +4,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::tasks_client::TasksClient;
-use containerd_client::services::v1::{
-    CreateContainerRequest, CreateTaskRequest, DeleteContainerRequest, StartRequest, WaitRequest,
-};
+use containerd_client::services::v1::CreateContainerRequest;
+use containerd_client::tonic;
+use containerd_client::tonic::Request;
 use containerd_client::with_namespace;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 pub struct ContainerdSandbox {
     pub namespace: String,
@@ -72,8 +70,8 @@ impl Sandbox for ContainerdSandbox {
             .await
             .context("Failed to connect to containerd socket")?;
 
-        let mut container_client = ContainersClient::new(channel.clone());
-        let mut task_client = TasksClient::new(channel.clone());
+        let mut _container_client = ContainersClient::new(channel.clone());
+        let mut _task_client = TasksClient::new(channel.clone());
 
         let container_id = format!("memobuild-{}", &node.hash[..12]);
 
@@ -82,24 +80,25 @@ impl Sandbox for ContainerdSandbox {
         let spec_json = serde_json::to_vec(&spec)?;
 
         // 4. Create Container
-        let create_req = with_namespace!(
-            CreateContainerRequest {
-                id: container_id.clone(),
-                image: "alpine:latest".to_string(), // Simplified: should use base image
-                runtime: Some(containerd_client::types::v1::container::Runtime {
-                    name: self.runtime.clone(),
-                    options: None,
-                }),
-                spec: Some(prost_types::Any {
-                    type_url: "types.containerd.io/opencontainers/runtime-spec/1/Spec".to_string(),
-                    value: spec_json,
-                }),
-                snapshotter: self.snapshotter.clone(),
-                snapshot_key: container_id.clone(),
-                ..Default::default()
-            },
-            self.namespace.clone()
-        );
+        let container = containerd_client::services::v1::Container {
+            id: container_id.clone(),
+            image: "alpine:latest".to_string(),
+            runtime: Some(containerd_client::services::v1::container::Runtime {
+                name: self.runtime.clone(),
+                options: None,
+            }),
+            spec: Some(prost_types::Any {
+                type_url: "types.containerd.io/opencontainers/runtime-spec/1/Spec".to_string(),
+                value: spec_json,
+            }),
+            snapshotter: self.snapshotter.clone(),
+            snapshot_key: container_id.clone(),
+            ..Default::default()
+        };
+        let req = CreateContainerRequest {
+            container: Some(container),
+        };
+        let _create_req = with_namespace!(req, &self.namespace);
 
         // Note: Real execution requires more steps (Task creation, Start, Wait)
         // This is a simplified logic flow for the Phase 6 MVP.
