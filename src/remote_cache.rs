@@ -76,13 +76,19 @@ impl HttpRemoteCache {
 
         if let Some(tls) = tls_config {
             if let Ok(client_config) = tls.client_config() {
-                builder = builder.use_rustls_tls().use_preconfigured_tls(client_config);
+                builder = builder
+                    .use_rustls_tls()
+                    .use_preconfigured_tls(client_config);
             }
         }
 
         let client = builder.build().unwrap_or_else(|_| Client::new());
 
-        Self { base_url, client, auth_token }
+        Self {
+            base_url,
+            client,
+            auth_token,
+        }
     }
 }
 

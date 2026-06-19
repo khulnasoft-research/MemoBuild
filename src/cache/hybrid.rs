@@ -1,5 +1,5 @@
-use crate::cache::remote::RemoteCache;
 use crate::cache::local::LocalCache;
+use crate::cache::remote::RemoteCache;
 use anyhow::Result;
 use std::sync::Arc;
 

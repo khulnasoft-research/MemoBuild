@@ -74,7 +74,7 @@ impl ProvenanceGenerator {
     pub fn sign(&self, provenance: &Provenance) -> Result<Attestation> {
         let payload = serde_json::to_string(provenance)?;
         let signature = in_toto::sign_dsse(&payload)?;
-        
+
         Ok(Attestation {
             payload_type: "application/vnd.in-toto+json".to_string(),
             payload,

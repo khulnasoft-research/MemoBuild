@@ -395,7 +395,8 @@ impl RemoteCache for DistributedCache {
                     self.local_cache.put_layer(hash, &data).await?;
                     if let Some(primary_node) = self.cluster.get_primary_node(hash).await? {
                         if let Some(primary_client) = self.get_remote_client(&primary_node).await {
-                            let _ = primary_client.put_layer(hash, &data).await; // Best effort
+                            let _ = primary_client.put_layer(hash, &data).await;
+                            // Best effort
                         }
                     }
                     return Ok(Some(data));

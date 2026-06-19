@@ -1,5 +1,7 @@
 use super::ArtifactStorage;
 use anyhow::Result;
+use futures::Stream;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::OnceCell;
 
@@ -110,13 +112,7 @@ impl ArtifactStorage for S3Storage {
         let rt = tokio::runtime::Handle::current();
         let client = rt.block_on(self.get_client());
 
-        let resp = match rt.block_on(
-            client
-                .get_object()
-                .bucket(&bucket)
-                .key(&key)
-                .send(),
-        ) {
+        let resp = match rt.block_on(client.get_object().bucket(&bucket).key(&key).send()) {
             Ok(r) => r,
             Err(e) => {
                 let msg = format!("{}", e);
@@ -136,6 +132,36 @@ impl ArtifactStorage for S3Storage {
         Ok(Some(body))
     }
 
+    fn stream_get<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send + 'a>>>> {
+        let key = self.key(hash);
+        let bucket = self.bucket.clone();
+        let rt = tokio::runtime::Handle::current();
+        let client = rt.block_on(self.get_client());
+
+        let resp = match rt.block_on(client.get_object().bucket(&bucket).key(&key).send()) {
+            Ok(r) => r,
+            Err(e) => {
+                let msg = format!("{}", e);
+                if msg.contains("NoSuchKey") || msg.contains("NotFound") {
+                    return Ok(None);
+                }
+                return Err(anyhow::anyhow!("S3 stream_get failed: {}", e));
+            }
+        };
+
+        let data = rt
+            .block_on(resp.body.collect())
+            .map_err(|e| anyhow::anyhow!("S3 stream read failed: {}", e))?
+            .into_bytes()
+            .to_vec();
+
+        let stream = futures::stream::once(async { Ok(data) });
+        Ok(Some(Box::pin(stream)))
+    }
+
     fn exists(&self, hash: &str) -> Result<bool> {
         let key = self.key(hash);
         let bucket = self.bucket.clone();
@@ -143,13 +169,7 @@ impl ArtifactStorage for S3Storage {
         let rt = tokio::runtime::Handle::current();
         let client = rt.block_on(self.get_client());
 
-        match rt.block_on(
-            client
-                .head_object()
-                .bucket(&bucket)
-                .key(&key)
-                .send(),
-        ) {
+        match rt.block_on(client.head_object().bucket(&bucket).key(&key).send()) {
             Ok(_) => Ok(true),
             Err(e) => {
                 let msg = format!("{}", e);
@@ -168,14 +188,8 @@ impl ArtifactStorage for S3Storage {
         let rt = tokio::runtime::Handle::current();
         let client = rt.block_on(self.get_client());
 
-        rt.block_on(
-            client
-                .delete_object()
-                .bucket(&bucket)
-                .key(&key)
-                .send(),
-        )
-        .map_err(|e| anyhow::anyhow!("S3 delete failed: {}", e))?;
+        rt.block_on(client.delete_object().bucket(&bucket).key(&key).send())
+            .map_err(|e| anyhow::anyhow!("S3 delete failed: {}", e))?;
 
         Ok(())
     }

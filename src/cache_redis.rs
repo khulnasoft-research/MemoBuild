@@ -68,8 +68,7 @@ impl RemoteCache for RedisCache {
     }
 
     async fn get(&self, hash: &str) -> Result<Option<Vec<u8>>> {
-        let data: Option<fred::types::RedisValue> =
-            self.client.get(&self.blob_key(hash)).await?;
+        let data: Option<fred::types::RedisValue> = self.client.get(&self.blob_key(hash)).await?;
         match data {
             Some(val) => Ok(Some(val.convert::<Vec<u8>>()?)),
             None => Ok(None),
@@ -81,7 +80,13 @@ impl RemoteCache for RedisCache {
         if self.ttl_secs > 0 {
             let _: () = self
                 .client
-                .set(&key, data, Some(Expiration::EX(self.ttl_secs as i64)), None, false)
+                .set(
+                    &key,
+                    data,
+                    Some(Expiration::EX(self.ttl_secs as i64)),
+                    None,
+                    false,
+                )
                 .await?;
         } else {
             let _: () = self.client.set(&key, data, None, None, false).await?;
@@ -95,8 +100,7 @@ impl RemoteCache for RedisCache {
     }
 
     async fn get_layer(&self, hash: &str) -> Result<Option<Vec<u8>>> {
-        let data: Option<fred::types::RedisValue> =
-            self.client.get(&self.layer_key(hash)).await?;
+        let data: Option<fred::types::RedisValue> = self.client.get(&self.layer_key(hash)).await?;
         match data {
             Some(val) => Ok(Some(val.convert::<Vec<u8>>()?)),
             None => Ok(None),
@@ -108,7 +112,13 @@ impl RemoteCache for RedisCache {
         if self.ttl_secs > 0 {
             let _: () = self
                 .client
-                .set(&key, data, Some(Expiration::EX(self.ttl_secs as i64)), None, false)
+                .set(
+                    &key,
+                    data,
+                    Some(Expiration::EX(self.ttl_secs as i64)),
+                    None,
+                    false,
+                )
                 .await?;
         } else {
             let _: () = self.client.set(&key, data, None, None, false).await?;
@@ -138,10 +148,19 @@ impl RemoteCache for RedisCache {
         if self.ttl_secs > 0 {
             let _: () = self
                 .client
-                .set(&key, json.as_str(), Some(Expiration::EX(self.ttl_secs as i64)), None, false)
+                .set(
+                    &key,
+                    json.as_str(),
+                    Some(Expiration::EX(self.ttl_secs as i64)),
+                    None,
+                    false,
+                )
                 .await?;
         } else {
-            let _: () = self.client.set(&key, json.as_str(), None, None, false).await?;
+            let _: () = self
+                .client
+                .set(&key, json.as_str(), None, None, false)
+                .await?;
         }
         Ok(())
     }

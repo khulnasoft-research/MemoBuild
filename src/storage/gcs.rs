@@ -1,19 +1,45 @@
 use super::ArtifactStorage;
 use anyhow::Result;
+use futures::{Stream, TryStreamExt};
+use google_cloud_storage::client::{Client, ClientConfig};
+use google_cloud_storage::http::objects::delete::DeleteObjectRequest;
+use google_cloud_storage::http::objects::download::Range;
+use google_cloud_storage::http::objects::get::GetObjectRequest;
+use google_cloud_storage::http::objects::upload::{Media, UploadObjectRequest, UploadType};
+use std::pin::Pin;
+use std::sync::Arc;
+use tokio::sync::OnceCell;
 
 /// Google Cloud Storage backed artifact storage.
 ///
-/// Wraps the `google-cloud-storage` crate. Authentication is handled via
-/// Application Default Credentials (ADC) — set `GOOGLE_APPLICATION_CREDENTIALS`
-/// or run on GCE/GKE with a service account.
+/// Uses the `google-cloud-storage` crate with Application Default Credentials.
+/// Set `GOOGLE_APPLICATION_CREDENTIALS` or run on GCE/GKE with a service account.
 pub struct GcsStorage {
+    client: Arc<OnceCell<Client>>,
     bucket: String,
     prefix: String,
 }
 
 impl GcsStorage {
     pub fn new_sync(bucket: String, prefix: String) -> Self {
-        Self { bucket, prefix }
+        Self {
+            client: Arc::new(OnceCell::new()),
+            bucket,
+            prefix,
+        }
+    }
+
+    async fn get_client(&self) -> Result<&Client> {
+        self.client
+            .get_or_try_init(|| async {
+                let config = ClientConfig::default()
+                    .with_auth()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("GCS auth failed: {}", e))?;
+                Ok(Client::new(config))
+            })
+            .await
+            .map_err(|e: anyhow::Error| e)
     }
 
     fn object_name(&self, hash: &str) -> String {
@@ -27,45 +53,129 @@ impl GcsStorage {
 
 impl ArtifactStorage for GcsStorage {
     fn put(&self, hash: &str, data: &[u8]) -> Result<String> {
-        let _name = self.object_name(hash);
-        let _data = data.to_vec();
+        let name = self.object_name(hash);
+        let bucket = self.bucket.clone();
+        let data = data.to_vec();
+        let rt = tokio::runtime::Handle::current();
 
-        // TODO: Implement actual GCS upload via google-cloud-storage client.
-        // For now, write to local disk as fallback so the trait contract is satisfied.
-        let cache_dir = std::env::var("MEMOBUILD_CACHE_DIR")
-            .unwrap_or_else(|_| "/tmp/memobuild-gcs".to_string());
-        let path = std::path::PathBuf::from(&cache_dir).join(hash);
-        std::fs::create_dir_all(&cache_dir)?;
-        std::fs::write(&path, data)?;
+        let client = rt.block_on(self.get_client())?;
 
-        Ok(format!("gs://{}/{}", self.bucket, self.object_name(hash)))
+        let media = Media::new(name.clone());
+        let upload_type = UploadType::Simple(media);
+        let req = UploadObjectRequest {
+            bucket,
+            ..Default::default()
+        };
+
+        rt.block_on(client.upload_object(&req, data, &upload_type))
+            .map_err(|e| anyhow::anyhow!("GCS upload failed: {}", e))?;
+
+        Ok(format!("gs://{}/{}", self.bucket, name))
     }
 
     fn get(&self, hash: &str) -> Result<Option<Vec<u8>>> {
-        let cache_dir = std::env::var("MEMOBUILD_CACHE_DIR")
-            .unwrap_or_else(|_| "/tmp/memobuild-gcs".to_string());
-        let path = std::path::PathBuf::from(&cache_dir).join(hash);
-        if path.exists() {
-            Ok(Some(std::fs::read(path)?))
-        } else {
-            Ok(None)
+        let name = self.object_name(hash);
+        let bucket = self.bucket.clone();
+        let rt = tokio::runtime::Handle::current();
+
+        let client = rt.block_on(self.get_client())?;
+
+        let req = GetObjectRequest {
+            bucket,
+            object: name,
+            ..Default::default()
+        };
+
+        let result = rt.block_on(client.download_object(&req, &Range::default()));
+        match result {
+            Ok(data) => Ok(Some(data)),
+            Err(e) => {
+                let msg = format!("{}", e);
+                if msg.contains("NotFound") || msg.contains("not found") {
+                    return Ok(None);
+                }
+                Err(anyhow::anyhow!("GCS get failed: {}", e))
+            }
+        }
+    }
+
+    fn stream_get<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send + 'a>>>> {
+        let name = self.object_name(hash);
+        let bucket = self.bucket.clone();
+        let rt = tokio::runtime::Handle::current();
+
+        let client = rt.block_on(self.get_client())?;
+
+        let req = GetObjectRequest {
+            bucket: bucket.clone(),
+            object: name.clone(),
+            ..Default::default()
+        };
+
+        let stream_result = rt.block_on(client.download_streamed_object(&req, &Range::default()));
+        match stream_result {
+            Ok(stream) => {
+                let mapped = stream
+                    .map_ok(|bytes| bytes.to_vec())
+                    .map_err(|e| anyhow::anyhow!("GCS stream error: {}", e));
+                Ok(Some(Box::pin(mapped)))
+            }
+            Err(e) => {
+                let msg = format!("{}", e);
+                if msg.contains("NotFound") || msg.contains("not found") {
+                    return Ok(None);
+                }
+                Err(anyhow::anyhow!("GCS stream_get failed: {}", e))
+            }
         }
     }
 
     fn exists(&self, hash: &str) -> Result<bool> {
-        let cache_dir = std::env::var("MEMOBUILD_CACHE_DIR")
-            .unwrap_or_else(|_| "/tmp/memobuild-gcs".to_string());
-        let path = std::path::PathBuf::from(&cache_dir).join(hash);
-        Ok(path.exists())
+        let name = self.object_name(hash);
+        let bucket = self.bucket.clone();
+        let rt = tokio::runtime::Handle::current();
+
+        let client = rt.block_on(self.get_client())?;
+
+        let req = GetObjectRequest {
+            bucket,
+            object: name,
+            ..Default::default()
+        };
+
+        let result = rt.block_on(client.download_object(&req, &Range(Some(0), Some(0))));
+        match result {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                let msg = format!("{}", e);
+                if msg.contains("NotFound") || msg.contains("not found") {
+                    Ok(false)
+                } else {
+                    Err(anyhow::anyhow!("GCS exists check failed: {}", e))
+                }
+            }
+        }
     }
 
     fn delete(&self, hash: &str) -> Result<()> {
-        let cache_dir = std::env::var("MEMOBUILD_CACHE_DIR")
-            .unwrap_or_else(|_| "/tmp/memobuild-gcs".to_string());
-        let path = std::path::PathBuf::from(&cache_dir).join(hash);
-        if path.exists() {
-            std::fs::remove_file(path)?;
-        }
+        let name = self.object_name(hash);
+        let bucket = self.bucket.clone();
+        let rt = tokio::runtime::Handle::current();
+
+        let client = rt.block_on(self.get_client())?;
+
+        let req = DeleteObjectRequest {
+            bucket,
+            object: name,
+            ..Default::default()
+        };
+
+        rt.block_on(client.delete_object(&req))
+            .map_err(|e| anyhow::anyhow!("GCS delete failed: {}", e))?;
+
         Ok(())
     }
 }

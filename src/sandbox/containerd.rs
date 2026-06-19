@@ -87,7 +87,7 @@ impl Sandbox for ContainerdSandbox {
                 name: self.runtime.clone(),
                 options: None,
             }),
-            spec: Some(prost_types::Any {
+            spec: Some(prost_types_0_11::Any {
                 type_url: "types.containerd.io/opencontainers/runtime-spec/1/Spec".to_string(),
                 value: spec_json,
             }),

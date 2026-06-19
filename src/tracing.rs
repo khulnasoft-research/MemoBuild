@@ -4,8 +4,8 @@
 
 use opentelemetry::global;
 use opentelemetry::KeyValue;
-use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::SpanExporter;
+use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::Resource;
 use std::env;
@@ -27,12 +27,14 @@ pub fn init_tracing() -> Option<()> {
 
     let provider = SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
-        .with_resource(Resource::builder()
-            .with_attributes(vec![
-                KeyValue::new("service.name", "memobuild"),
-                KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
-            ])
-            .build())
+        .with_resource(
+            Resource::builder()
+                .with_attributes(vec![
+                    KeyValue::new("service.name", "memobuild"),
+                    KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+                ])
+                .build(),
+        )
         .build();
 
     global::set_tracer_provider(provider.clone());
@@ -58,7 +60,12 @@ macro_rules! build_span {
 #[macro_export]
 macro_rules! cache_span {
     ($operation:expr, $tier:expr) => {
-        tracing::span!(tracing::Level::INFO, "cache.lookup", operation = $operation, cache.tier = $tier)
+        tracing::span!(
+            tracing::Level::INFO,
+            "cache.lookup",
+            operation = $operation,
+            cache.tier = $tier
+        )
     };
 }
 
@@ -66,7 +73,11 @@ macro_rules! cache_span {
 #[macro_export]
 macro_rules! replicate_span {
     ($target_node:expr) => {
-        tracing::span!(tracing::Level::INFO, "cluster.replicate", target_node = $target_node)
+        tracing::span!(
+            tracing::Level::INFO,
+            "cluster.replicate",
+            target_node = $target_node
+        )
     };
 }
 
@@ -74,7 +85,13 @@ macro_rules! replicate_span {
 #[macro_export]
 macro_rules! oci_span {
     ($operation:expr, $registry:expr, $layer_count:expr) => {
-        tracing::span!(tracing::Level::INFO, "oci.push", operation = $operation, registry = $registry, layer_count = $layer_count)
+        tracing::span!(
+            tracing::Level::INFO,
+            "oci.push",
+            operation = $operation,
+            registry = $registry,
+            layer_count = $layer_count
+        )
     };
 }
 

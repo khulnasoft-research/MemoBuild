@@ -3,12 +3,15 @@
 //! This module implements the gRPC services defined in the proto file.
 
 use crate::cache::RemoteCache;
-use crate::remote_exec::RemoteExecutor;
 use crate::remote_exec::reapi::memobuild;
-use reapi::{ReapiExecutionService, ReapiCacheService};
+use crate::remote_exec::reapi::{ReapiCacheService, ReapiExecutionService};
+use crate::remote_exec::RemoteExecutor;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tonic::transport::Server;
+
+const FILE_DESCRIPTOR_SET: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/memobuild_v1_descriptor.bin"));
 
 pub async fn start_grpc_server(
     port: u16,
@@ -25,16 +28,14 @@ pub async fn start_grpc_server(
 
     Server::builder()
         .add_service(
-            memobuild::v1::execution_service_server::ExecutionServiceServer::new(execution_service)
+            memobuild::v1::execution_service_server::ExecutionServiceServer::new(execution_service),
         )
+        .add_service(memobuild::v1::cache_service_server::CacheServiceServer::new(cache_service))
         .add_service(
-            memobuild::v1::cache_service_server::CacheServiceServer::new(cache_service)
-        )
-        .add_service(
-            tonic_reflection::server::Builder::new()
-                .register_encoded_file_descriptor_set(memobuild::v1::FILE_DESCRIPTOR_SET)
-                .build()
-                .unwrap()
+            tonic_reflection::server::Builder::configure()
+                .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+                .build_v1()
+                .unwrap(),
         )
         .serve(addr)
         .await?;

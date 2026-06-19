@@ -5,11 +5,11 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 pub mod client;
-pub mod scheduler;
 #[cfg(feature = "remote-exec")]
 pub mod grpc_server;
 #[cfg(feature = "remote-exec")]
 pub mod reapi;
+pub mod scheduler;
 #[cfg(any(feature = "server", feature = "remote-exec"))]
 pub mod server;
 pub mod worker;

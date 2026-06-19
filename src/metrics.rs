@@ -10,8 +10,8 @@ use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::metrics::histogram::Histogram;
 use prometheus_client::registry::Registry;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -90,7 +90,15 @@ impl MetricsRegistry {
         );
 
         let artifact_size = Histogram::new(
-            vec![1024.0, 10240.0, 102400.0, 1048576.0, 10485760.0, 104857600.0].into_iter(), // 1KB, 10KB, 100KB, 1MB, 10MB, 100MB
+            vec![
+                1024.0,
+                10240.0,
+                102400.0,
+                1048576.0,
+                10485760.0,
+                104857600.0,
+            ]
+            .into_iter(), // 1KB, 10KB, 100KB, 1MB, 10MB, 100MB
         );
         registry.register(
             "memobuild_artifact_size_bytes",
@@ -118,36 +126,46 @@ impl MetricsRegistry {
     }
 
     pub fn inc_cache_hits(&self, tier: &str, node_id: &str) {
-        self.cache_hits.get_or_create(&CacheLabels {
-            tier: tier.to_string(),
-            node_id: node_id.to_string(),
-        }).inc();
+        self.cache_hits
+            .get_or_create(&CacheLabels {
+                tier: tier.to_string(),
+                node_id: node_id.to_string(),
+            })
+            .inc();
     }
 
     pub fn inc_cache_misses(&self, tier: &str, node_id: &str) {
-        self.cache_misses.get_or_create(&CacheLabels {
-            tier: tier.to_string(),
-            node_id: node_id.to_string(),
-        }).inc();
+        self.cache_misses
+            .get_or_create(&CacheLabels {
+                tier: tier.to_string(),
+                node_id: node_id.to_string(),
+            })
+            .inc();
     }
 
     pub fn observe_build_duration(&self, duration_secs: f64, status: &str) {
-        self.build_duration.get_or_create(&BuildLabels {
-            status: status.to_string(),
-        }).observe(duration_secs);
+        self.build_duration
+            .get_or_create(&BuildLabels {
+                status: status.to_string(),
+            })
+            .observe(duration_secs);
     }
 
     pub fn set_cluster_nodes(&self, region: &str, status: &str, count: i64) {
-        self.cluster_nodes.get_or_create(&ClusterLabels {
-            region: region.to_string(),
-            status: status.to_string(),
-        }).set(count);
+        self.cluster_nodes
+            .get_or_create(&ClusterLabels {
+                region: region.to_string(),
+                status: status.to_string(),
+            })
+            .set(count);
     }
 
     pub fn set_replication_lag(&self, node_id: &str, lag_secs: f64) {
-        self.replication_lag.get_or_create(&ReplicationLabels {
-            node_id: node_id.to_string(),
-        }).set(lag_secs);
+        self.replication_lag
+            .get_or_create(&ReplicationLabels {
+                node_id: node_id.to_string(),
+            })
+            .set(lag_secs);
     }
 
     pub fn observe_artifact_size(&self, size_bytes: f64) {

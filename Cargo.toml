@@ -39,8 +39,11 @@ oci-spec = "0.6"
 containerd-client = { version = "0.4", optional = true }
 tonic = { version = "0.14", optional = true, features = ["transport"] }
 tonic-reflection = { version = "0.14", optional = true }
+tonic-prost = { version = "0.14", optional = true }
 prost = { version = "0.14", optional = true }
 prost-types = { version = "0.14", optional = true }
+prost-types-0_11 = { package = "prost-types", version = "0.11", optional = true }
+tokio-stream = { version = "0.1", optional = true }
 parking_lot = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt", "ansi"] }
@@ -81,8 +84,8 @@ protobuf-src = "2.1"
 [features]
 default = ["remote-exec"]
 server = []
-containerd = ["containerd-client", "tonic", "tonic-reflection", "prost", "prost-types"]
-remote-exec = ["tonic", "tonic-reflection", "prost", "prost-types"]
+containerd = ["containerd-client", "tonic", "tonic-reflection", "tonic-prost", "prost", "prost-types-0_11", "tokio-stream"]
+remote-exec = ["tonic", "tonic-reflection", "tonic-prost", "prost", "prost-types", "tokio-stream"]
 
 [dev-dependencies]
 criterion = "0.8.2"

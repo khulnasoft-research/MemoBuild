@@ -110,7 +110,6 @@ pub async fn start_server(
         .route("/ws", get(ws_handler))
         .layer(middleware::from_fn(add_api_version_header))
         // Add auth routes
-        
         .with_state(state);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
@@ -611,9 +610,13 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> impl IntoRespons
     let output = metrics.encode();
     (
         StatusCode::OK,
-        axum::response::AppendHeaders([(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")]),
+        axum::response::AppendHeaders([(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )]),
         output,
-    ).into_response()
+    )
+        .into_response()
 }
 
 async fn check_layer(

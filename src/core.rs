@@ -34,12 +34,17 @@ pub fn compute_composite_hashes(graph: &mut BuildGraph, _env_fp: &EnvFingerprint
 }
 
 #[allow(dead_code)]
-pub fn propagate_manifests(graph: &mut BuildGraph) -> std::collections::HashMap<String, serde_json::Value> {
+pub fn propagate_manifests(
+    graph: &mut BuildGraph,
+) -> std::collections::HashMap<String, serde_json::Value> {
     let mut manifests = std::collections::HashMap::new();
     for node in &mut graph.nodes {
         node.metadata.input_manifest_hash = Some(node.hash.clone());
         // Assume manifest is the metadata
-        manifests.insert(node.hash.clone(), serde_json::to_value(&node.metadata).unwrap());
+        manifests.insert(
+            node.hash.clone(),
+            serde_json::to_value(&node.metadata).unwrap(),
+        );
     }
     manifests
 }

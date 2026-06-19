@@ -4,16 +4,14 @@
 //! to enable compatibility with Bazel and other REAPI clients.
 
 use crate::cache::RemoteCache;
-use crate::remote_exec::{
-    ActionRequest, ActionResult, Digest, ExecutionMetadata, RemoteExecutor,
-};
+use crate::remote_exec::{ActionRequest, ActionResult, Digest, ExecutionMetadata, RemoteExecutor};
+use chrono::Utc;
+use serde_json;
+use sha2::Digest as Sha2Digest;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
-use chrono::Utc;
-use sha2::Digest as Sha2Digest;
-use serde_json;
 use uuid::Uuid;
 
 pub mod memobuild {
@@ -23,18 +21,13 @@ pub mod memobuild {
 }
 
 use memobuild::v1::{
-    execution_service_server::ExecutionService,
-    cache_service_server::CacheService,
-    ExecuteRequest, ExecuteResponse, WaitExecutionRequest,
-    GetExecutionStreamInfoRequest, GetExecutionStreamInfoResponse,
-    GetActionResultRequest, ActionResult as ProtoActionResult,
-    UpdateActionResultRequest, UpdateActionResultResponse,
-    FindMissingBlobsRequest, FindMissingBlobsResponse,
-    BatchReadBlobsRequest, BatchReadBlobsResponse,
-    BatchUpdateBlobsRequest, BatchUpdateBlobsResponse,
-    GetTreeRequest, GetTreeResponse,
-    Blob, BlobDigest, FileNode,
-    action_result, execution_info,
+    action_result, cache_service_server::CacheService, execute_response,
+    execution_service_server::ExecutionService, ActionResult as ProtoActionResult,
+    BatchReadBlobsRequest, BatchReadBlobsResponse, BatchUpdateBlobsRequest,
+    BatchUpdateBlobsResponse, Blob, BlobDigest, ExecuteRequest, ExecuteResponse, ExecutionInfo,
+    FindMissingBlobsRequest, FindMissingBlobsResponse, GetActionResultRequest,
+    GetExecutionStreamInfoRequest, GetExecutionStreamInfoResponse, GetTreeRequest, GetTreeResponse,
+    UpdateActionResultRequest, UpdateActionResultResponse, WaitExecutionRequest,
 };
 
 /// REAPI-compatible Execution Service
@@ -61,31 +54,27 @@ impl ReapiExecutionService {
         &self,
         action_digest: &str,
     ) -> Result<Option<ActionResult>, Status> {
-        match self.cache.get(&Self::action_result_cache_key(action_digest)).await {
-            Ok(Some(payload)) => {
-                serde_json::from_slice::<ActionResult>(&payload)
-                    .map(Some)
-                    .map_err(|e| Status::internal(format!("Failed to deserialize cached action result: {}", e)))
-            }
+        match self
+            .cache
+            .get(&Self::action_result_cache_key(action_digest))
+            .await
+        {
+            Ok(Some(payload)) => serde_json::from_slice::<ActionResult>(&payload)
+                .map(Some)
+                .map_err(|e| {
+                    Status::internal(format!("Failed to deserialize cached action result: {}", e))
+                }),
             Ok(None) => Ok(None),
             Err(e) => Err(Status::internal(format!("Cache error: {}", e))),
         }
-    }
-
-    async fn put_cached_action_result(&self, action_digest: &str, result: &ActionResult) -> Result<(), Status> {
-        let payload = serde_json::to_vec(result)
-            .map_err(|e| Status::internal(format!("Failed to serialize action result: {}", e)))?;
-
-        self.cache
-            .put(&Self::action_result_cache_key(action_digest), &payload)
-            .await
-            .map_err(|e| Status::internal(format!("Cache error: {}", e)))
     }
 }
 
 #[tonic::async_trait]
 impl ExecutionService for ReapiExecutionService {
     type ExecuteStream = tokio_stream::wrappers::ReceiverStream<Result<ExecuteResponse, Status>>;
+    type WaitExecutionStream =
+        tokio_stream::wrappers::ReceiverStream<Result<ExecuteResponse, Status>>;
 
     async fn execute(
         &self,
@@ -101,7 +90,9 @@ impl ExecutionService for ReapiExecutionService {
 
         let action_digest = Digest {
             hash: action_digest_parts[0].to_string(),
-            size_bytes: action_digest_parts[1].parse().map_err(|_| Status::invalid_argument("Invalid digest size"))?,
+            size_bytes: action_digest_parts[1]
+                .parse()
+                .map_err(|_| Status::invalid_argument("Invalid digest size"))?,
         };
 
         // Check cached action result first
@@ -110,17 +101,23 @@ impl ExecutionService for ReapiExecutionService {
                 output: Some(execute_response::Output::ExitCode(
                     execute_response::ExitCode {
                         exit_code: cached_result.exit_code,
-                    }
+                    },
                 )),
             };
             let (tx, rx) = tokio::sync::mpsc::channel(1);
             tx.send(Ok(response)).await.unwrap();
-            return Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)));
+            return Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+                rx,
+            )));
         }
 
         // Create execution request
         let action_request = ActionRequest {
-            command: vec!["/bin/sh".to_string(), "-c".to_string(), "echo 'placeholder'".to_string()], // TODO: Parse from action
+            command: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo 'placeholder'".to_string(),
+            ], // TODO: Parse from action
             env: HashMap::new(),
             input_root_digest: action_digest.clone(),
             timeout: std::time::Duration::from_secs(300),
@@ -141,57 +138,74 @@ impl ExecutionService for ReapiExecutionService {
 
         let handle = tokio::spawn(async move {
             // Send execution started
-            let _ = tx.send(Ok(ExecuteResponse {
-                output: Some(execute_response::Output::ExecutionMetadata(
-                    execute_response::ExecutionMetadata {
-                        worker: "worker-1".to_string(),
-                        queued_duration_ns: 0,
-                        worker_start_timestamp_ns: Utc::now().timestamp_nanos(),
-                        worker_completed_timestamp_ns: 0,
-                        input_fetch_duration_ns: 0,
-                        output_upload_duration_ns: 0,
-                    }
-                )),
-            })).await;
+            let _ = tx
+                .send(Ok(ExecuteResponse {
+                    output: Some(execute_response::Output::ExecutionMetadata(
+                        execute_response::ExecutionMetadata {
+                            worker: "worker-1".to_string(),
+                            queued_duration_ns: 0,
+                            worker_start_timestamp_ns: Utc::now()
+                                .timestamp_nanos_opt()
+                                .unwrap_or(0),
+                            worker_completed_timestamp_ns: 0,
+                            input_fetch_duration_ns: 0,
+                            output_upload_duration_ns: 0,
+                        },
+                    )),
+                }))
+                .await;
 
             // Execute action
             match scheduler.execute(action_request).await {
                 Ok(result) => {
                     // Send stdout/stderr
                     if !result.stdout_raw.is_empty() {
-                        let _ = tx.send(Ok(ExecuteResponse {
-                            output: Some(execute_response::Output::Stdout(
-                                execute_response::Stdout {
-                                    data: result.stdout_raw.clone(),
-                                }
-                            )),
-                        })).await;
+                        let _ = tx
+                            .send(Ok(ExecuteResponse {
+                                output: Some(execute_response::Output::Stdout(
+                                    execute_response::Stdout {
+                                        data: result.stdout_raw.clone(),
+                                    },
+                                )),
+                            }))
+                            .await;
                     }
 
                     if !result.stderr_raw.is_empty() {
-                        let _ = tx.send(Ok(ExecuteResponse {
-                            output: Some(execute_response::Output::Stderr(
-                                execute_response::Stderr {
-                                    data: result.stderr_raw.clone(),
-                                }
-                            )),
-                        })).await;
+                        let _ = tx
+                            .send(Ok(ExecuteResponse {
+                                output: Some(execute_response::Output::Stderr(
+                                    execute_response::Stderr {
+                                        data: result.stderr_raw.clone(),
+                                    },
+                                )),
+                            }))
+                            .await;
                     }
 
                     // Send exit code
-                    let _ = tx.send(Ok(ExecuteResponse {
-                        output: Some(execute_response::Output::ExitCode(
-                            execute_response::ExitCode {
-                                exit_code: result.exit_code,
-                            }
-                        )),
-                    })).await;
+                    let _ = tx
+                        .send(Ok(ExecuteResponse {
+                            output: Some(execute_response::Output::ExitCode(
+                                execute_response::ExitCode {
+                                    exit_code: result.exit_code,
+                                },
+                            )),
+                        }))
+                        .await;
 
                     // Cache result
-                    let _ = cache.put(&ReapiExecutionService::action_result_cache_key(&action_digest.hash), &serde_json::to_vec(&result).unwrap_or_default()).await;
+                    let _ = cache
+                        .put(
+                            &ReapiExecutionService::action_result_cache_key(&action_digest.hash),
+                            &serde_json::to_vec(&result).unwrap_or_default(),
+                        )
+                        .await;
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(Status::internal(format!("Execution failed: {}", e)))).await;
+                    let _ = tx
+                        .send(Err(Status::internal(format!("Execution failed: {}", e))))
+                        .await;
                 }
             }
 
@@ -204,7 +218,9 @@ impl ExecutionService for ReapiExecutionService {
             executions.insert(execution_id, handle);
         }
 
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            rx,
+        )))
     }
 
     async fn wait_execution(
@@ -242,6 +258,43 @@ impl ReapiCacheService {
     pub fn new(cache: Arc<dyn RemoteCache>) -> Self {
         Self { cache }
     }
+
+    fn action_result_cache_key(action_digest: &str) -> String {
+        format!("reapi-action-result/{}", action_digest)
+    }
+
+    async fn get_cached_action_result(
+        &self,
+        action_digest: &str,
+    ) -> Result<Option<ActionResult>, Status> {
+        match self
+            .cache
+            .get(&Self::action_result_cache_key(action_digest))
+            .await
+        {
+            Ok(Some(payload)) => serde_json::from_slice::<ActionResult>(&payload)
+                .map(Some)
+                .map_err(|e| {
+                    Status::internal(format!("Failed to deserialize cached action result: {}", e))
+                }),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Status::internal(format!("Cache error: {}", e))),
+        }
+    }
+
+    async fn put_cached_action_result(
+        &self,
+        action_digest: &str,
+        result: &ActionResult,
+    ) -> Result<(), Status> {
+        let payload = serde_json::to_vec(result)
+            .map_err(|e| Status::internal(format!("Failed to serialize action result: {}", e)))?;
+
+        self.cache
+            .put(&Self::action_result_cache_key(action_digest), &payload)
+            .await
+            .map_err(|e| Status::internal(format!("Cache error: {}", e)))
+    }
 }
 
 #[tonic::async_trait]
@@ -254,8 +307,8 @@ impl CacheService for ReapiCacheService {
 
         match self.get_cached_action_result(&action_digest).await {
             Ok(Some(result)) => {
-                let stdout_digest = Sha2Digest::digest(&result.stdout_raw);
-                let stderr_digest = Sha2Digest::digest(&result.stderr_raw);
+                let stdout_digest = sha2::Sha256::digest(&result.stdout_raw);
+                let stderr_digest = sha2::Sha256::digest(&result.stderr_raw);
                 let proto_result = ProtoActionResult {
                     action_digest: action_digest.clone(),
                     exit_code: result.exit_code,
@@ -267,9 +320,15 @@ impl CacheService for ReapiCacheService {
                         digest: format!("sha256:{}", hex::encode(stderr_digest)),
                         size: result.stderr_raw.len() as i64,
                     }),
-                    execution_info: Some(execution_info::ExecutionInfo {
-                        input_fetch_completed_timestamp: result.execution_metadata.worker_start_timestamp.unwrap_or(0),
-                        execution_completed_timestamp: result.execution_metadata.worker_completed_timestamp.unwrap_or(0),
+                    execution_info: Some(ExecutionInfo {
+                        input_fetch_completed_timestamp: result
+                            .execution_metadata
+                            .worker_start_timestamp
+                            .unwrap_or(0),
+                        execution_completed_timestamp: result
+                            .execution_metadata
+                            .worker_completed_timestamp
+                            .unwrap_or(0),
                         execution_worker: result.execution_metadata.worker_id,
                     }),
                     message_cache_info: None,
@@ -286,7 +345,10 @@ impl CacheService for ReapiCacheService {
         &self,
         request: Request<UpdateActionResultRequest>,
     ) -> Result<Response<UpdateActionResultResponse>, Status> {
-        let proto_result = request.into_inner().action_result;
+        let proto_result = request
+            .into_inner()
+            .action_result
+            .ok_or_else(|| Status::invalid_argument("Missing action_result"))?;
 
         let result = ActionResult {
             output_files: HashMap::new(),
@@ -294,10 +356,20 @@ impl CacheService for ReapiCacheService {
             stdout_raw: Vec::new(),
             stderr_raw: Vec::new(),
             execution_metadata: ExecutionMetadata {
-                worker_id: proto_result.execution_info.as_ref().map(|ei| ei.execution_worker.clone()).unwrap_or_default(),
+                worker_id: proto_result
+                    .execution_info
+                    .as_ref()
+                    .map(|ei| ei.execution_worker.clone())
+                    .unwrap_or_default(),
                 queued_timestamp: None,
-                worker_start_timestamp: proto_result.execution_info.as_ref().map(|ei| Some(ei.input_fetch_completed_timestamp)),
-                worker_completed_timestamp: proto_result.execution_info.as_ref().map(|ei| Some(ei.execution_completed_timestamp)),
+                worker_start_timestamp: proto_result
+                    .execution_info
+                    .as_ref()
+                    .map(|ei| ei.input_fetch_completed_timestamp),
+                worker_completed_timestamp: proto_result
+                    .execution_info
+                    .as_ref()
+                    .map(|ei| ei.execution_completed_timestamp),
             },
         };
 
@@ -316,7 +388,12 @@ impl CacheService for ReapiCacheService {
 
         let mut missing = Vec::new();
         for digest in blob_digests {
-            if !self.cache.has(&digest).await.map_err(|e| Status::internal(format!("Cache error: {}", e)))? {
+            if !self
+                .cache
+                .has(&digest)
+                .await
+                .map_err(|e| Status::internal(format!("Cache error: {}", e)))?
+            {
                 missing.push(digest);
             }
         }
@@ -326,7 +403,8 @@ impl CacheService for ReapiCacheService {
         }))
     }
 
-    type BatchReadBlobsStream = tokio_stream::wrappers::ReceiverStream<Result<BatchReadBlobsResponse, Status>>;
+    type BatchReadBlobsStream =
+        tokio_stream::wrappers::ReceiverStream<Result<BatchReadBlobsResponse, Status>>;
 
     async fn batch_read_blobs(
         &self,
@@ -342,24 +420,32 @@ impl CacheService for ReapiCacheService {
             tokio::spawn(async move {
                 match cache.get(&digest).await {
                     Ok(Some(data)) => {
-                        let _ = tx.send(Ok(BatchReadBlobsResponse {
-                            blob: Some(Blob {
-                                digest: digest.clone(),
-                                data,
-                            }),
-                        })).await;
+                        let _ = tx
+                            .send(Ok(BatchReadBlobsResponse {
+                                blob: Some(Blob {
+                                    digest: digest.clone(),
+                                    data,
+                                }),
+                            }))
+                            .await;
                     }
                     Ok(None) => {
-                        let _ = tx.send(Err(Status::not_found(format!("Blob {} not found", digest)))).await;
+                        let _ = tx
+                            .send(Err(Status::not_found(format!("Blob {} not found", digest))))
+                            .await;
                     }
                     Err(e) => {
-                        let _ = tx.send(Err(Status::internal(format!("Cache error: {}", e)))).await;
+                        let _ = tx
+                            .send(Err(Status::internal(format!("Cache error: {}", e))))
+                            .await;
                     }
                 }
             });
         }
 
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            rx,
+        )))
     }
 
     async fn batch_update_blobs(
@@ -370,11 +456,16 @@ impl CacheService for ReapiCacheService {
 
         let mut blob_digests = Vec::new();
         for blob in blobs {
-            let already_cached = self.cache.has(&blob.digest).await
+            let already_cached = self
+                .cache
+                .has(&blob.digest)
+                .await
                 .map_err(|e| Status::internal(format!("Cache error: {}", e)))?;
 
             if !already_cached {
-                self.cache.put(&blob.digest, &blob.data).await
+                self.cache
+                    .put(&blob.digest, &blob.data)
+                    .await
                     .map_err(|e| Status::internal(format!("Cache error: {}", e)))?;
             }
 

@@ -3,10 +3,20 @@ pub mod local;
 pub mod s3;
 
 use anyhow::Result;
+use futures::Stream;
+use std::pin::Pin;
 
 pub trait ArtifactStorage: Send + Sync {
     fn put(&self, hash: &str, data: &[u8]) -> Result<String>;
     fn get(&self, hash: &str) -> Result<Option<Vec<u8>>>;
+
+    /// Stream the artifact contents in chunks.
+    /// Returns `None` if the artifact does not exist.
+    fn stream_get<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send + 'a>>>>;
+
     fn exists(&self, hash: &str) -> Result<bool>;
     fn delete(&self, hash: &str) -> Result<()>;
 }
@@ -57,7 +67,9 @@ pub fn storage_from_env(base_dir: &std::path::Path) -> Result<Box<dyn ArtifactSt
             let prefix = std::env::var("MEMOBUILD_STORAGE_PREFIX").unwrap_or_default();
             // S3Storage::new is async, but we construct a blocking wrapper here.
             // The server calls this at startup inside a tokio runtime.
-            Ok(Box::new(S3Storage::new_sync(bucket, endpoint, region, prefix)))
+            Ok(Box::new(S3Storage::new_sync(
+                bucket, endpoint, region, prefix,
+            )))
         }
         StorageBackend::Gcs => {
             let bucket = std::env::var("MEMOBUILD_STORAGE_BUCKET")

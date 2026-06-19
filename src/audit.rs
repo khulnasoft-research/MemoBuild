@@ -6,7 +6,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditLog {
@@ -31,30 +31,27 @@ impl AuditLog {
 
     pub fn verify(&self) -> Result<bool> {
         let mut prev_hash = "0".repeat(64);
-        
+
         for entry in &self.entries {
             // Verify the entry's previous hash
             if entry.prev_hash != prev_hash {
                 return Ok(false);
             }
-            
+
             // Verify the entry's hash
             let computed = entry.compute_hash()?;
             if computed != entry.hash {
                 return Ok(false);
             }
-            
+
             prev_hash = entry.hash.clone();
         }
-        
+
         Ok(true)
     }
 
     pub fn query(&self, filter: &AuditFilter) -> Vec<&AuditEntry> {
-        self.entries
-            .iter()
-            .filter(|e| filter.matches(e))
-            .collect()
+        self.entries.iter().filter(|e| filter.matches(e)).collect()
     }
 }
 
@@ -88,14 +85,14 @@ impl AuditEntry {
             prev_hash: prev_hash.to_string(),
             hash: String::new(),
         };
-        
+
         entry.hash = entry.compute_hash()?;
         Ok(entry)
     }
 
     pub fn compute_hash(&self) -> Result<String> {
         let mut hasher = Sha256::new();
-        
+
         hasher.update(self.timestamp.to_rfc3339().as_bytes());
         hasher.update(self.event_type.to_string().as_bytes());
         hasher.update(self.actor.as_bytes());
@@ -103,7 +100,7 @@ impl AuditEntry {
         hasher.update(self.action.as_bytes());
         hasher.update(serde_json::to_string(&self.details)?.as_bytes());
         hasher.update(self.prev_hash.as_bytes());
-        
+
         Ok(hex::encode(hasher.finalize()))
     }
 }
@@ -168,31 +165,31 @@ impl AuditFilter {
                 return false;
             }
         }
-        
+
         if let Some(ref a) = self.actor {
             if &entry.actor != a {
                 return false;
             }
         }
-        
+
         if let Some(ref r) = self.resource {
             if !entry.resource.contains(r) {
                 return false;
             }
         }
-        
+
         if let Some(ref start) = self.start_time {
             if entry.timestamp < *start {
                 return false;
             }
         }
-        
+
         if let Some(ref end) = self.end_time {
             if entry.timestamp > *end {
                 return false;
             }
         }
-        
+
         true
     }
 }
@@ -228,18 +225,17 @@ impl AuditLogger {
 
     pub fn export(&self, format: ExportFormat) -> Result<String> {
         let log = self.log.read();
-        
+
         match format {
-            ExportFormat::Json => {
-                serde_json::to_string_pretty(&*log)
-                    .map_err(|e| anyhow::anyhow!("Failed to export: {}", e))
-            }
+            ExportFormat::Json => serde_json::to_string_pretty(&*log)
+                .map_err(|e| anyhow::anyhow!("Failed to export: {}", e)),
             ExportFormat::Csv => {
                 let mut csv = String::new();
                 csv.push_str("timestamp,event_type,actor,resource,action,details\n");
-                
+
                 for entry in &log.entries {
-                    csv.push_str(&format!("{},{},{},{},{},{}\n",
+                    csv.push_str(&format!(
+                        "{},{},{},{},{},{}\n",
                         entry.timestamp.to_rfc3339(),
                         entry.event_type,
                         entry.actor,
@@ -248,17 +244,17 @@ impl AuditLogger {
                         serde_json::to_string(&entry.details).unwrap_or_default()
                     ));
                 }
-                
+
                 Ok(csv)
             }
             ExportFormat::Ndjson => {
                 let mut ndjson = String::new();
-                
+
                 for entry in &log.entries {
                     ndjson.push_str(&serde_json::to_string(entry)?);
                     ndjson.push('\n');
                 }
-                
+
                 Ok(ndjson)
             }
         }
@@ -274,17 +270,25 @@ impl Default for AuditLogger {
 #[derive(Debug, Clone)]
 pub enum ExportFormat {
     Json,
-   Csv,
+    Csv,
     Ndjson,
 }
 
 /// Helper function to log cache operations
 pub fn log_cache_access(logger: &AuditLogger, hash: &str, is_write: bool) {
     logger.log_event(AuditEvent {
-        event_type: if is_write { EventType::CacheWrite } else { EventType::CacheRead },
+        event_type: if is_write {
+            EventType::CacheWrite
+        } else {
+            EventType::CacheRead
+        },
         actor: "system".to_string(),
         resource: format!("/cache/{}", hash),
-        action: if is_write { "PUT".to_string() } else { "GET".to_string() },
+        action: if is_write {
+            "PUT".to_string()
+        } else {
+            "GET".to_string()
+        },
         details: serde_json::json!({ "hash": hash }),
     });
 }
@@ -296,7 +300,7 @@ pub fn log_build_event(logger: &AuditLogger, build_id: &str, status: &str) {
         "completed" => EventType::BuildCompleted,
         _ => EventType::BuildFailed,
     };
-    
+
     logger.log_event(AuditEvent {
         event_type,
         actor: "system".to_string(),

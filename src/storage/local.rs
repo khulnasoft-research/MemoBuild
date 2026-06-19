@@ -1,8 +1,10 @@
 use super::ArtifactStorage;
 use anyhow::{Context, Result};
+use futures::Stream;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 
 pub struct LocalStorage {
     base_dir: PathBuf,
@@ -56,6 +58,20 @@ impl ArtifactStorage for LocalStorage {
         }
     }
 
+    fn stream_get<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send + 'a>>>> {
+        let path = self.get_sharded_path(hash);
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let file = fs::File::open(&path)?;
+        let stream = file_stream(file);
+        Ok(Some(Box::pin(stream)))
+    }
+
     fn exists(&self, hash: &str) -> Result<bool> {
         Ok(self.get_sharded_path(hash).exists())
     }
@@ -67,6 +83,24 @@ impl ArtifactStorage for LocalStorage {
         }
         Ok(())
     }
+}
+
+fn file_stream(file: fs::File) -> impl Stream<Item = Result<Vec<u8>>> {
+    const CHUNK_SIZE: usize = 64 * 1024;
+    futures::stream::unfold((file, false), move |(mut f, eof)| async move {
+        if eof {
+            return None;
+        }
+        let mut buf = vec![0u8; CHUNK_SIZE];
+        match f.read(&mut buf) {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok(buf), (f, false)))
+            }
+            Err(e) => Some((Err(anyhow::Error::from(e)), (f, true))),
+        }
+    })
 }
 
 #[cfg(test)]

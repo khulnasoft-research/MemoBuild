@@ -3,9 +3,9 @@
 //! This module provides the HTTP server for the distributed cache cluster,
 //! including cluster management endpoints and auto-scaling integration.
 
-use crate::network::scaling::{AutoScaler, ScalingMetrics};
 use crate::cache::cluster::{CacheCluster, ClusterStatus};
 use crate::cache::remote::RemoteCache;
+use crate::network::scaling::{AutoScaler, ScalingMetrics};
 use crate::server::metadata::MetadataStoreTrait;
 use crate::server::storage::ArtifactStorage;
 

@@ -67,7 +67,9 @@ impl VaultSecretProvider {
         }
     }
 
-    async fn get_client(&self) -> Result<tokio::sync::MutexGuard<'_, Option<vaultrs::client::VaultClient>>> {
+    async fn get_client(
+        &self,
+    ) -> Result<tokio::sync::MutexGuard<'_, Option<vaultrs::client::VaultClient>>> {
         let mut guard = self.client.lock().await;
         if guard.is_none() {
             let client = vaultrs::client::VaultClient::new(
@@ -86,18 +88,27 @@ impl VaultSecretProvider {
 impl SecretProvider for VaultSecretProvider {
     async fn get(&self, key: &str) -> Result<String> {
         let mut guard = self.get_client().await?;
-        let client = guard.as_mut().ok_or_else(|| anyhow::anyhow!("Vault client not initialized"))?;
-        let secret: HashMap<String, String> = vaultrs::kv2::read(client, &self.mount, &self.path).await?;
-        secret.get(key).cloned().ok_or_else(|| anyhow::anyhow!("Secret {} not found", key))
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Vault client not initialized"))?;
+        let secret: HashMap<String, String> =
+            vaultrs::kv2::read(client, &self.mount, &self.path).await?;
+        secret
+            .get(key)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Secret {} not found", key))
     }
 
     async fn set(&self, key: &str, value: &str) -> Result<()> {
         let mut guard = self.get_client().await?;
-        let client = guard.as_mut().ok_or_else(|| anyhow::anyhow!("Vault client not initialized"))?;
-        
-        let mut secret = vaultrs::kv2::read::<HashMap<String, String>>(client, &self.mount, &self.path)
-            .await
-            .unwrap_or_default();
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Vault client not initialized"))?;
+
+        let mut secret =
+            vaultrs::kv2::read::<HashMap<String, String>>(client, &self.mount, &self.path)
+                .await
+                .unwrap_or_default();
         secret.insert(key.to_string(), value.to_string());
         vaultrs::kv2::set(client, &self.mount, &self.path, &secret).await?;
         Ok(())
@@ -105,8 +116,11 @@ impl SecretProvider for VaultSecretProvider {
 
     async fn list(&self) -> Result<Vec<String>> {
         let mut guard = self.get_client().await?;
-        let client = guard.as_mut().ok_or_else(|| anyhow::anyhow!("Vault client not initialized"))?;
-        let secret: HashMap<String, String> = vaultrs::kv2::read(client, &self.mount, &self.path).await?;
+        let client = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("Vault client not initialized"))?;
+        let secret: HashMap<String, String> =
+            vaultrs::kv2::read(client, &self.mount, &self.path).await?;
         Ok(secret.keys().cloned().collect())
     }
 }
@@ -129,11 +143,15 @@ impl AwsKmsProvider {
 #[async_trait]
 impl SecretProvider for AwsKmsProvider {
     async fn get(&self, _key: &str) -> Result<String> {
-        Err(anyhow::anyhow!("AWS KMS get not implemented - use SecretsManager for key storage"))
+        Err(anyhow::anyhow!(
+            "AWS KMS get not implemented - use SecretsManager for key storage"
+        ))
     }
 
     async fn set(&self, _key: &str, _value: &str) -> Result<()> {
-        Err(anyhow::anyhow!("AWS KMS set not implemented - use SecretsManager for key storage"))
+        Err(anyhow::anyhow!(
+            "AWS KMS set not implemented - use SecretsManager for key storage"
+        ))
     }
 
     async fn list(&self) -> Result<Vec<String>> {
@@ -143,19 +161,24 @@ impl SecretProvider for AwsKmsProvider {
 
 /// Create a secret provider based on environment configuration
 pub fn create_secret_provider() -> Result<Box<dyn SecretProvider>> {
-    let provider_type = std::env::var("MEMOBUILD_SECRET_PROVIDER")
-        .unwrap_or_else(|_| "env".to_string());
+    let provider_type =
+        std::env::var("MEMOBUILD_SECRET_PROVIDER").unwrap_or_else(|_| "env".to_string());
 
     match provider_type.as_str() {
         "vault" => {
             let addr = std::env::var("MEMOBUILD_VAULT_ADDR")?;
             let token = std::env::var("MEMOBUILD_VAULT_TOKEN")?;
-            let mount = std::env::var("MEMOBUILD_VAULT_MOUNT").unwrap_or_else(|_| "secret".to_string());
-            let path = std::env::var("MEMOBUILD_VAULT_PATH").unwrap_or_else(|_| "memobuild".to_string());
-            Ok(Box::new(VaultSecretProvider::new(&addr, &token, mount, path)))
+            let mount =
+                std::env::var("MEMOBUILD_VAULT_MOUNT").unwrap_or_else(|_| "secret".to_string());
+            let path =
+                std::env::var("MEMOBUILD_VAULT_PATH").unwrap_or_else(|_| "memobuild".to_string());
+            Ok(Box::new(VaultSecretProvider::new(
+                &addr, &token, mount, path,
+            )))
         }
         "aws" => {
-            let region = std::env::var("MEMOBUILD_AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
+            let region =
+                std::env::var("MEMOBUILD_AWS_REGION").unwrap_or_else(|_| "us-east-1".to_string());
             let key_id = std::env::var("MEMOBUILD_AWS_KMS_KEY_ID")?;
             Ok(Box::new(AwsKmsProvider::new(&region, &key_id)))
         }

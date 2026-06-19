@@ -35,7 +35,7 @@ impl CosignVerifier {
         // 3. Fetch the signature from the registry
         // 4. Verify the signature using the public key from Fulcio
         // 5. Check the Rekor transparency log for the entry
-        
+
         // For now, implement a stub that checks the environment variable
         if self.require_signed {
             // Would do actual verification here
@@ -47,7 +47,8 @@ impl CosignVerifier {
         } else {
             Ok(VerificationResult {
                 verified: true,
-                message: "Signature verification skipped (MEMOBUILD_REQUIRE_SIGNED=false)".to_string(),
+                message: "Signature verification skipped (MEMOBUILD_REQUIRE_SIGNED=false)"
+                    .to_string(),
                 rekor_entry: None,
             })
         }
@@ -59,14 +60,14 @@ impl CosignVerifier {
         // 1. Extract the public key from the certificate
         // 2. Verify the signature over the payload
         // 3. Validate the certificate chain through Fulcio
-        
+
         Ok(!self.require_signed)
     }
 
     pub async fn check_rekor(&self, _digest: &str) -> Result<Option<RekorEntry>> {
         // Check Rekor transparency log for the artifact
         // In production, this would call the Rekor API
-        
+
         if self.rekor_url.contains("sigstore.dev") {
             // Can't actually check without network
             return Ok(None);
@@ -117,7 +118,7 @@ pub async fn verify_keyless(_image: &str, _oidc_token: &str) -> Result<Verificat
     // 1. Use the OIDC token to get a certificate from Fulcio
     // 2. Use the certificate to verify the signature
     // 3. Check Rekor for the transparency log entry
-    
+
     Ok(VerificationResult {
         verified: false,
         message: "Keyless verification not implemented".to_string(),

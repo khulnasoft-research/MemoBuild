@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use hex::encode as hex_encode;
 use memobuild::server;
 use memobuild::{audit, cache, core, docker, executor, export, logging, sbom, slsa, verify};
-use hex::encode as hex_encode;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
@@ -236,7 +236,11 @@ async fn main() -> Result<()> {
         }
         Commands::Graph { path, file } => run_graph(path, file).await,
         Commands::ExplainCache { path, file, node } => run_explain_cache(path, file, node).await,
-        Commands::Server { port, postgres, database_url } => {
+        Commands::Server {
+            port,
+            postgres,
+            database_url,
+        } => {
             let webhook_url = env::var("MEMOBUILD_WEBHOOK").ok();
             let data_dir = env::current_dir()?.join(".memobuild-server");
             fs::create_dir_all(&data_dir)?;
@@ -259,10 +263,13 @@ async fn main() -> Result<()> {
                 if let Some(db_url) = database_url.as_ref() {
                     let config = parse_postgres_url(db_url)?;
                     let (client, connection) = tokio_postgres::connect(
-                        &format!("postgresql://{}:{}@{}:{}/{}",
-                            config.user, config.password, config.host, config.port, config.database),
+                        &format!(
+                            "postgresql://{}:{}@{}:{}/{}",
+                            config.user, config.password, config.host, config.port, config.database
+                        ),
                         NoTls,
-                    ).await?;
+                    )
+                    .await?;
                     tokio::spawn(async move {
                         if let Err(e) = connection.await {
                             eprintln!("connection error: {}", e);
@@ -276,7 +283,15 @@ async fn main() -> Result<()> {
                 None
             };
 
-            server::start_server(port, data_dir, webhook_url, tls_config, admin_token, auth_db_client).await
+            server::start_server(
+                port,
+                data_dir,
+                webhook_url,
+                tls_config,
+                admin_token,
+                auth_db_client,
+            )
+            .await
         }
         Commands::Scheduler { port } => start_scheduler(port).await,
         Commands::Grpc { port } => start_reapi_server(port).await,
@@ -460,7 +475,10 @@ async fn run_build(
     let attestation = provenance_generator.sign(&provenance)?;
     let attestation_path = output_dir.join("attestation.json");
     provenance_generator.save_attestation(&attestation, &attestation_path)?;
-    println!("🔐 SLSA attestation written to {}", attestation_path.display());
+    println!(
+        "🔐 SLSA attestation written to {}",
+        attestation_path.display()
+    );
 
     audit::log_build_event(&audit_logger, &build_id, "completed");
 
@@ -697,10 +715,16 @@ async fn start_reapi_server(_port: u16) -> Result<()> {
             _port
         );
 
-        let cache = Arc::new(create_cache().await?);
+        let hybrid_cache = create_cache().await?;
+        let cache = hybrid_cache
+            .remote
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No remote cache configured for gRPC server"))?;
         let scheduler = Arc::new(Scheduler::new(SchedulingStrategy::RoundRobin));
 
-        grpc_server::start_grpc_server(_port, scheduler, cache).await
+        grpc_server::start_grpc_server(_port, scheduler, cache)
+            .await
+            .map_err(|e| anyhow::anyhow!("gRPC server error: {}", e))
     }
     #[cfg(not(feature = "remote-exec"))]
     anyhow::bail!("Remote Execution feature not enabled. Build with --features remote-exec")

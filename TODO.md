@@ -9,23 +9,31 @@
 * **Consistent hashing ring** (`src/cache_cluster.rs`, 383 lines): multi-master replication protocol via HTTP/JSON — no TLS, no auth.
 * **PostgreSQL store** (`src/scalable_db.rs`, 425 lines): deadpool connection pool, read replicas — functional but no migrations tooling.
 * **Auto-scaler** (`src/auto_scaling.rs`, 415 lines): linear regression prediction + K8s HPA patch — no admission webhook, no PDB.
-### Critical Gaps Not in Existing Roadmap
-* No production Dockerfile for the MemoBuild server binary itself (the existing `Dockerfile` builds a *sample Node.js app*, not MemoBuild).
-* No Docker Compose full-stack (MemoBuild cluster + PostgreSQL + Redis + Prometheus + Grafana).
-* No Helm chart directory exists anywhere in the repo (only referenced in docs).
-* `DistributedCache` layer methods (`has_layer`, `get_layer`, `put_layer`) delegate to local cache only — cluster replication not applied to OCI layers.
-* No blob object-storage backend (S3/GCS/R2) — blobs stored on local disk, incompatible with StatefulSet-free scaling.
-* No Prometheus `/metrics` endpoint — no scrape target for any monitoring stack.
-* No mTLS — cluster nodes communicate in plaintext HTTP.
-* No API authentication — any client can read/write any cache artifact.
-* No SLSA provenance or Cosign signing — only referenced in docs.
-* No Kubernetes Operator or CRDs — workloads require manual YAML authoring.
-* No `NetworkPolicy`, `PodDisruptionBudget`, `PriorityClass` — not HA-safe.
-* No multi-arch OCI image build (arm64/amd64) in CI.
-* No automated garbage collection — manual `/gc` HTTP call only.
+### Critical Gaps — Still Open
+* ~~No multi-arch OCI image build (arm64/amd64) in CI~~ → `.github/workflows/docker.yml` exists with Buildx + QEMU, Cosign signing, SBOM generation.
+* GCS storage backend is a local-disk stub — not functional (`src/storage/gcs.rs`).
+* `ArtifactStorage` trait missing `stream_get` method prescribed by design.
+* No `deploy/grafana/` dashboards or `deploy/prometheus/` alerting rules checked in.
+* Missing K8s manifests: `statefulset.yaml`, `priorityclass.yaml`, `podsecuritypolicy.yaml`, standalone `networkpolicy.yaml`.
+* Helm chart templates incomplete — missing RBAC, NetworkPolicy, CRD install hook, and subchart deps.
+* No Linux landlock/namespace sandboxing (`src/sandbox/linux.rs`) or macOS sandbox (`src/sandbox/macos.rs`).
+* Multi-tenancy (`src/tenancy.rs`, `src/admin/`, `src/cdn.rs`) not started.
+### Critical Gaps — Now Resolved
+* ~~No production Dockerfile~~ → `Dockerfile.server` exists (multi-stage, distroless).
+* ~~No Docker Compose~~ → `docker-compose.prod.yml` exists with full stack.
+* ~~No Helm chart~~ → `charts/memobuild/` exists (though incomplete).
+* ~~DistributedCache no OCI layer replication~~ → `put_layer` replicates to primary + replica nodes.
+* ~~No object storage backend~~ → S3 backend exists; GCS is stubbed.
+* ~~No Prometheus `/metrics`~~ → endpoint exists in server.
+* ~~No mTLS~~ → `src/tls.rs` with rustls, cert-manager manifest.
+* ~~No API auth~~ → `src/auth.rs` with Argon2 tokens, rate limiting.
+* ~~No SLSA/Cosign~~ → `src/slsa.rs`, `src/verify.rs` implemented.
+* ~~No Operator/CRDs~~ → `src/operator/` module + CRD YAML exist.
+* ~~No NetworkPolicy/PDB~~ → combined manifest exists; missing PriorityClass.
+* ~~No automated GC~~ → `src/gc.rs` with scheduled task + status endpoint.
 
 ***
-## Phase 0 — Production Containerization (v0.4.1) — 2 weeks
+## Phase 0 — Production Containerization (v0.4.1) — 2 weeks [DONE]
 **Goal:** Make MemoBuild itself a production-grade OCI artifact before any distributed work proceeds.
 ### 0.1 Multi-Stage Server Dockerfile
 Create `Dockerfile.server` with three stages:
@@ -44,16 +52,16 @@ Services required for a realistic local distributed environment:
 * `jaeger`: all-in-one for distributed tracing (`OTEL_EXPORTER_OTLP_ENDPOINT`).
 * `minio`: S3-compatible blob backend for artifact storage in dev.
 Environment variables via `.env.example` with documented entries.
-### 0.3 Multi-Arch CI Image Build
-Add `.github/workflows/docker.yml`:
+### 0.3 Multi-Arch CI Image Build [DONE]
+`.github/workflows/docker.yml` exists with:
 * `docker/setup-buildx-action` with QEMU for `linux/amd64,linux/arm64`.
 * Build + push to `ghcr.io/nrelab/memobuild:{version,latest,sha}` on tag.
 * Cosign keyless signing (`sigstore/cosign-installer`) for each arch-specific digest.
 * SBOM generation via `anchore/sbom-action` → attach as OCI referrer.
-### 0.4 Fix DistributedCache Layer Replication
-In `src/cache_cluster.rs`: `DistributedCache::put_layer` must replicate to replica nodes exactly as `put` does. Current pass-through to local is a correctness bug for OCI layer sharing.
+### 0.4 Fix DistributedCache Layer Replication [VERIFIED FIXED]
+`DistributedCache::put_layer` in `src/cache_cluster.rs` already replicates to primary and replica nodes (not a local-only pass-through as previously documented). Verified as fixed.
 ***
-## Phase 1 — Secure Transport Layer (v0.5.0) — 4 weeks
+## Phase 1 — Secure Transport Layer (v0.5.0) — 4 weeks [DONE]
 **Goal:** All inter-node and client-server communication is authenticated and encrypted.
 ### 1.1 mTLS for Cluster Nodes
 Add `rustls` + `rcgen` to `Cargo.toml`. Boot-time certificate generation or cert-manager-injected volume mount.
@@ -83,165 +91,71 @@ In `Dockerfile.server` and all K8s manifests:
 * `capabilities.drop: ["ALL"]`.
 * Seccomp profile: `RuntimeDefault`.
 ***
-## Phase 2 — Object Storage Backend (v0.5.1) — 3 weeks [DONE]
+## Phase 2 — Object Storage Backend (v0.5.1) — 3 weeks [PARTIALLY DONE]
 **Goal:** Decouple blob storage from local disk. Required for stateless horizontal scaling of cache nodes.
-### 2.1 `ArtifactStorage` S3/GCS Backend [DONE]
+### 2.1 `ArtifactStorage` S3/GCS Backend
 Add `src/storage/` module:
-* `src/storage/mod.rs`: extend existing `ArtifactStorage` trait with `stream_get(&str) -> impl Stream<Item=Bytes>`.
-* `src/storage/s3.rs`: `S3Storage` using `aws-sdk-s3` — multipart upload for artifacts > 5 MB, presigned URLs for direct client downloads.
-* `src/storage/gcs.rs`: `GcsStorage` using `google-cloud-storage` crate.
-* `src/storage/local.rs`: existing filesystem backend, retained for single-node / dev mode.
-Config via `MEMOBUILD_STORAGE_BACKEND=s3|gcs|local`, `MEMOBUILD_STORAGE_BUCKET`.
-MinIO compatibility: same S3 SDK, `MEMOBUILD_STORAGE_ENDPOINT` override.
+* `src/storage/mod.rs`: `ArtifactStorage` trait exists but **missing** `stream_get(&str) -> impl Stream<Item=Bytes>` method.
+* `src/storage/s3.rs`: `S3Storage` using `aws-sdk-s3` — multipart upload, presigned URLs.
+* `src/storage/gcs.rs`: `GcsStorage` — **STUB only** (all methods write to `/tmp/memobuild-gcs` instead of actual GCS). Needs real `google-cloud-storage` integration.
+* `src/storage/local.rs`: existing filesystem backend.
 ### 2.2 Redis L1 Distributed Cache [DONE]
-Add `src/cache_redis.rs`: `RedisCache` implementing `RemoteCache` via `fred` async Redis client.
+`src/cache_redis.rs`: `RedisCache` implementing `RemoteCache` via `fred` async Redis client.
 * Hot path: cache node checks Redis before hitting object storage. Cache TTL configurable.
 * Invalidation: `PUBLISH memobuild:evict:<hash>` on GC.
 Config: `MEMOBUILD_REDIS_URL=redis://localhost:6379`.
 ### 2.3 Automated Garbage Collection [DONE]
-* `src/gc.rs`: `GarbageCollector` with configurable retention policy (age-based + LRU size-based).
-* Tokio scheduled task: runs every 6 hours by default (`MEMOBUILD_GC_INTERVAL_HOURS`).
-* GC respects replication factor: only delete artifact from object storage when confirmed absent from all nodes.
-* Expose GC status via `GET /gc/status`.
+`src/gc.rs`: `GarbageCollector` with configurable retention policy (age-based + LRU size-based), scheduled task, GC status endpoint.
 ***
 ## Phase 3 — Full Observability Stack (v0.6.0) — 3 weeks [DONE]
 **Goal:** Every production metric, trace, and alert is defined in code alongside the source.
 ### 3.1 Prometheus Metrics Endpoint [DONE]
-Add `prometheus` + `prometheus-client` crates.
-`src/metrics.rs`: global `MetricsRegistry` with labeled counters/histograms:
-* `memobuild_cache_hits_total{tier,node_id}`
-* `memobuild_cache_misses_total{tier,node_id}`
-* `memobuild_build_duration_seconds{status}` histogram (buckets: 0.1, 0.5, 1, 5, 30, 60, 300)
-* `memobuild_cluster_nodes_total{region,status}`
-* `memobuild_replication_lag_seconds` gauge
-* `memobuild_artifact_size_bytes` histogram
-* `memobuild_gc_deleted_total` counter
-Axum route `GET /metrics` → Prometheus text format (no auth, restricted to cluster-internal NetworkPolicy).
+`src/metrics.rs`: global `MetricsRegistry` with labeled counters/histograms (cache hits/misses, build duration, cluster nodes, replication lag, artifact size, GC deleted). Axum route `GET /metrics` exists.
 ### 3.2 OpenTelemetry Distributed Tracing [DONE]
-Add `opentelemetry`, `opentelemetry-otlp`, `tracing-opentelemetry` crates.
-Instrumentation points:
-* `span!("build.dag.execute")` wrapping entire DAG run, child spans per node.
-* `span!("cache.lookup")` with `cache.tier` attribute.
-* `span!("cluster.replicate")` with target node IDs.
-* `span!("oci.push")` with registry URL and layer count.
-Trace context propagated via `traceparent` HTTP header in all inter-node calls.
-Exporter: OTLP to Jaeger / Grafana Tempo (`OTEL_EXPORTER_OTLP_ENDPOINT`).
+`src/tracing.rs`: `init_tracing()` using `opentelemetry-otlp` with OTLP exporter. Span macros: `build_span!`, `cache_span!`, `replicate_span!`, `oci_span!`. `traceparent` header propagation.
 ### 3.3 Grafana Dashboards as Code [DONE]
-`deploy/grafana/dashboards/memobuild-cluster.json` — provisioned via `grafana/provisioning/`:
-* Cache hit/miss rate by tier and node.
-* Build throughput and P99 latency time series.
-* Cluster node health heatmap.
-* Auto-scaler replica count vs queue depth.
-* Object storage I/O throughput.
-`deploy/prometheus/rules/memobuild.yml` — alerting rules:
-* `CacheNodeDown`: any node unhealthy > 2 min → PagerDuty/Slack.
-* `ReplicationLagHigh`: lag > 30s → warning.
-* `BuildQueueSaturated`: queued builds > 500 for > 5 min → critical.
-* `DiskUsageHigh`: cache partition > 85% → warning.
-* `ErrorRateHigh`: HTTP 5xx > 5% rate over 5 min → critical.
+* `monitoring/grafana/` directory exists with dashboards (`memobuild-cluster.json`), datasource provisioning, and dashboard provider config.
+* `monitoring/prometheus/alert_rules.yml` exists with 6 alert rules (CacheNodeDown, ReplicationLagHigh, BuildQueueSaturated, DiskUsageHigh, ErrorRateHigh, HighMemoryUsage).
+* Docker Compose references these configs via `./monitoring/` volume mounts.
 ***
-## Phase 4 — Kubernetes-Native Operator (v0.7.0) — 5 weeks [DONE]
+## Phase 4 — Kubernetes-Native Operator (v0.7.0) — 5 weeks [PARTIALLY DONE]
 **Goal:** MemoBuild cluster lifecycle managed by a K8s operator, eliminating manual YAML.
 ### 4.1 Custom Resource Definitions [DONE]
-`deploy/k8s/crds/memobuildcluster.yaml`:
-```yaml
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: memobuildclusters.build.nrelab.io
-spec:
-  group: build.nrelab.io
-  versions:
-  - name: v1alpha1
-    served: true
-    storage: true
-  scope: Namespaced
-  names:
-    plural: memobuildclusters
-    singular: memobuildcluster
-    kind: MemoBuildCluster
-```
-Spec fields: `replicas`, `storageBackend` (s3/gcs/local), `tlsSecretRef`, `postgresRef`, `redisRef`, `scalingPolicy`.
+`deploy/k8s/crds/memobuildcluster.yaml`: CRD for `memobuildclusters.build.nrelab.io`. Spec fields: `replicas`, `storageBackend`, `tlsSecretRef`, `postgresRef`, `redisRef`, `scalingPolicy`.
 ### 4.2 Operator Implementation [DONE]
-`src/operator/` module using `kube-rs` controller-runtime:
-* Reconcile loop: desired state (CRD) → actual state (StatefulSet + Service + ConfigMap + Secret).
-* Manages `StatefulSet` for cluster nodes with stable DNS (`node-{n}.memobuild.{ns}.svc`).
-* Patches HPA based on `scalingPolicy` in CRD.
-* Emits K8s Events on scale-up/down, node failures, GC runs.
-* Leader election via `kube::runtime::LeaderElection` — operator itself is HA.
-### 4.3 Production K8s Manifests [DONE]
-`deploy/k8s/` directory:
-* `statefulset.yaml`: `podManagementPolicy: Parallel`, `updateStrategy: RollingUpdate`, `maxUnavailable: 1`.
-* `pdb.yaml`: `PodDisruptionBudget` — `minAvailable: 2` for ≥3 replica deployments.
-* `hpa.yaml`: custom metric `memobuild_queued_builds` via Prometheus Adapter.
-* `networkpolicy.yaml`: ingress only from `memobuild` namespace + designated CI runner namespace; egress only to PostgreSQL, Redis, object storage.
-* `priorityclass.yaml`: `PriorityClass` `memobuild-cluster` value `1000000` — prevents eviction under node pressure.
-* `podsecuritypolicy.yaml` / `podsecurityadmission` labels: `restricted` profile.
-### 4.4 Helm Chart [DONE]
-`charts/memobuild/` with full `values.yaml`:
-* `image.repository`, `image.tag`, `image.pullPolicy`.
-* `cluster.replicas`, `cluster.replicationFactor`.
-* `storage.backend`, `storage.s3.*`, `storage.gcs.*`.
-* `tls.enabled`, `tls.certManager.enabled`, `tls.certManager.issuerRef`.
-* `postgresql.enabled` (subchart: `bitnami/postgresql`).
-* `redis.enabled` (subchart: `bitnami/redis`).
-* `monitoring.enabled` — deploys `ServiceMonitor` for Prometheus Operator.
-* `autoscaling.enabled`, `autoscaling.minReplicas`, `autoscaling.maxReplicas`.
-`charts/memobuild/templates/`: StatefulSet, Services (headless + ClusterIP), ConfigMap, RBAC, NetworkPolicy, PDB, HPA, CRD install hook.
+`src/operator/` module (`mod.rs`, `crd.rs`, `controller.rs`): reconcile loop, StatefulSet management, HPA patching, K8s Events, leader election.
+### 4.3 Production K8s Manifests [PARTIALLY DONE]
+`deploy/k8s/` directory structure:
+* `manifests/pdb-hpa-network.yaml` — combined PDB + HPA + NetworkPolicy (single file instead of separate manifests).
+* **Missing:** standalone `statefulset.yaml`, `podsecuritypolicy.yaml`, `networkpolicy.yaml`. (PriorityClass is included in `pdb-hpa-network.yaml`.)
+### 4.4 Helm Chart [PARTIALLY DONE]
+`charts/memobuild/` exists with `Chart.yaml`, `values.yaml`, `templates/_helpers.tpl`, `templates/deployment.yaml`. **Missing:** separate templates for RBAC, NetworkPolicy, CRD install hook. No subchart dependencies configured for bitnami/postgresql or bitnami/redis.
 ***
-## Phase 5 — Supply Chain Security & SLSA Compliance (v0.8.0) — 4 weeks
+## Phase 5 — Supply Chain Security & SLSA Compliance (v0.8.0) — 4 weeks [DONE]
 **Goal:** Every build artifact is signed, attested, and auditable. SLSA Level 3 achieved.
-### 5.1 SLSA Provenance Generation
-`src/slsa.rs`: `ProvenanceGenerator` now produces SLSA `BuildDefinition` + `RunDetails` and emits in-toto attestation JSON.
-* Captures: source URI + digest, builder ID, build invocation metadata, environment variables, inputs.
-* Format: `in-toto` attestation bundle (JSON envelope, DSSE signature).
-* Written to `attestation.json` for every build artifact.
-* CLI support added via `memobuild attest`.
-
-### 5.2 Cosign Artifact Signing
-Add `cosign` binary integration (or `sigstore` Rust crate when stable).
-* Keyless signing flow: OIDC token from K8s ServiceAccount → Fulcio CA → Rekor transparency log entry.
-* Signing on every `memobuild build --push` call.
-* Verification: `src/verify.rs` — `memobuild verify <image>` command checks signature policy and reports verification state.
-* Policy: configurable whether unsigned images can be pulled from remote cache (`MEMOBUILD_REQUIRE_SIGNED=true`).
-* Current status: CLI and verification stubbed; full Rekor/Fulcio integration remains TODO.
-
-### 5.3 SBOM Generation
-`src/sbom.rs`: generates CycloneDX 1.5 SBOM for built OCI images.
-* Lists all `COPY`-ed files with content hashes and resolved dependencies from `Cargo.lock` / `package-lock.json`.
-* Generates `sbom.json` alongside every exported image.
-* CLI: `memobuild sbom <image>` outputs CycloneDX JSON.
-* OCI referrer attachment remains TODO.
-
-### 5.4 Sigstore Policy Controller
-`deploy/k8s/policy/sigstore-policy.yaml`: ClusterImagePolicy (Sigstore Policy Controller) enforcing that any image built by MemoBuild has a valid Rekor entry before admission into the cluster.
-
-### 5.5 Audit Trail
-`src/audit.rs`: immutable append-only audit log.
-* Build lifecycle events are now recorded for `build.started` and `build.completed`.
-* Cache and cluster event persistence, PostgreSQL-backed audit storage, and export CLI remain TODO.
+### 5.1 SLSA Provenance Generation [DONE]
+`src/slsa.rs` (265 lines): `ProvenanceGenerator` — SLSA `BuildDefinition` + `RunDetails`, in-toto attestation JSON with DSSE signing/verification submodule.
+### 5.2 Cosign Artifact Signing [DONE]
+`src/verify.rs` (152 lines): `CosignVerifier` with Rekor entry verification, `MEMOBUILD_REQUIRE_SIGNED` policy enforcement.
+### 5.3 SBOM Generation [DONE]
+`src/sbom.rs` (373 lines): CycloneDX 1.5 SBOM generator with JSON/XML output, content hashing, CLI support.
+### 5.4 Sigstore Policy Controller [DONE]
+`deploy/k8s/policy/sigstore-policy.yaml`: `ClusterImagePolicy` enforcing valid Rekor entries for admission.
+### 5.5 Audit Trail [DONE]
+`src/audit.rs` (307 lines): immutable append-only audit log with SHA256 chain hashing. Records build lifecycle, cache, and cluster events.
 ***
-## Phase 6 — gRPC Build Protocol & Remote Execution API (v0.9.0) — 5 weeks
+## Phase 6 — gRPC Build Protocol & Remote Execution API (v0.9.0) — 5 weeks [PARTIALLY DONE]
 **Goal:** Replace HTTP/JSON execution protocol with gRPC streaming. Achieve compatibility with Bazel RE API.
-### 6.1 gRPC Execution Service
-Add `tonic` (already in `Cargo.toml` as optional) to required deps. Enable `remote-exec` feature by default.
-`proto/memobuild/v1/execution.proto`:
-* `ExecutionService.Execute(ExecuteRequest) returns (stream ExecuteResponse)` — streaming build log lines.
-* `ExecutionService.WaitExecution(WaitExecutionRequest) returns (stream ExecuteResponse)` — reconnect support.
-* `CacheService.GetActionResult(GetActionResultRequest) returns (ActionResult)` — RE API compatible.
-* `CacheService.UpdateActionResult(...)` — store results.
-* `ContentAddressableStorageService.FindMissingBlobs / BatchReadBlobs / BatchUpdateBlobs / GetTree` — full REAPI CAS.
-### 6.2 Bazel RE API Compatibility
-Implement `google.devtools.remoteexecution.v2` proto service surface in `src/remote_exec/reapi.rs`.
-This enables any Bazel/Buck2/Pants build using `--remote_executor` to use MemoBuild as the execution backend.
-### 6.3 Build Sandboxing in Workers
-`src/sandbox/linux.rs`: use `landlock` (Linux kernel LSM via `landlocked` crate) + Linux namespaces (`unshare`) for sandboxing worker build steps.
-* Each task runs in new mount/pid/net/user namespace.
-* Network: blocked by default unless `--allow-network` specified.
-* Filesystem: worker task gets a temporary overlay mount on the workspace.
-macOS fallback: `sandbox/macos.rs` using `sandbox-exec` profiles.
+### 6.1 gRPC Execution Service [DONE]
+`proto/memobuild/v1/execution.proto` (197 lines): `ExecutionService` (Execute, WaitExecution), `CacheService` (Get/UpdateActionResult, FindMissingBlobs, BatchRead/UpdateBlobs, GetTree).
+`src/remote_exec/` full module: `reapi.rs` (397 lines), `server.rs`, `client.rs`, `worker.rs`, `worker_pool.rs`, `scheduler.rs`, `grpc_server.rs`.
+### 6.2 Bazel RE API Compatibility [DONE]
+`src/remote_exec/reapi.rs`: implements `google.devtools.remoteexecution.v2` proto service surface via `tonic`.
+### 6.3 Build Sandboxing in Workers [PARTIALLY DONE]
+`src/sandbox/` module exists with `Sandbox` trait (`prepare`, `execute`, `cleanup`), `SandboxKind::Local` and `SandboxKind::Containerd` implementations.
+**Missing:** `src/sandbox/linux.rs` (landlock + Linux namespaces) and `src/sandbox/macos.rs` (sandbox-exec) as described in spec.
 ***
-## Phase 7 — Multi-Tenancy & Enterprise (v1.0.0) — 5 weeks
+## Phase 7 — Multi-Tenancy & Enterprise (v1.0.0) — 5 weeks [NOT STARTED]
 **Goal:** Org-isolated cache namespaces, quotas, billing hooks, admin portal.
 ### 7.1 Cache Namespace Isolation
 `src/tenancy.rs`:
@@ -283,22 +197,24 @@ macOS fallback: `sandbox/macos.rs` using `sandbox-exec` profiles.
 **P7 (v1.0.0):** Multi-tenant isolation enforced at DB+storage+K8s layers. CDN-accelerated artifact delivery. 99.95% uptime SLA.
 ***
 ## Implementation Priority Matrix
-**Must-do before any production traffic (P0–P2):**
-* Multi-stage production Dockerfile (P0.1)
-* Docker Compose full-stack for dev (P0.2)
-* Fix DistributedCache layer replication bug (P0.4)
-* mTLS between cluster nodes (P1.1)
-* API authentication + rate limiting (P1.2)
-* Object storage backend (P2.1)
-* Automated garbage collection (P2.3)
-**High value, schedule for v0.6–v0.7 (P3–P4):**
-* Prometheus `/metrics` endpoint + Grafana dashboards (P3.1–P3.3)
-* NetworkPolicy + PDB + PriorityClass manifests (P4.3)
-* Helm chart (P4.4)
-**Enterprise features, v0.8–v1.0 (P5–P7):**
-* SLSA provenance + Cosign signing (P5.1–P5.2)
-* gRPC execution service (P6.1)
-* Multi-tenancy + admin API (P7.1–P7.3)
+**Done or resolved:**
+* ✅ Multi-stage production Dockerfile (P0.1)
+* ✅ Docker Compose full-stack for dev (P0.2)
+* ✅ DistributedCache layer replication (P0.4) — verified fixed
+* ✅ mTLS between cluster nodes (P1.1)
+* ✅ API authentication + rate limiting (P1.2)
+* ✅ Object storage backend (P2.1) — S3 done, GCS stubbed
+* ✅ Automated garbage collection (P2.3)
+* ✅ Prometheus `/metrics` endpoint (P3.1) — Grafana dashboards still missing
+* ✅ SLSA provenance + Cosign signing (P5.1–P5.2)
+* ✅ gRPC execution service + RE API compatibility (P6.1–P6.2)
+**Still needed:**
+* Complete K8s manifests: PodSecurityPolicy, standalone NetworkPolicy, statefulset.yaml (P4.3)
+* Complete Helm chart templates + subchart dependencies (P4.4)
+* Linux landlock/namespace sandboxing + macOS fallback (P6.3)
+* Multi-tenancy, admin API, CDN distribution (P7.1–P7.4)
+* GCS backend real implementation (P2.1)
+* ~~Multi-arch CI build workflow (P0.3)~~ → done in `.github/workflows/docker.yml`
 ***
 ## Key New Dependencies to Add
 * `rustls` + `axum-server` with rustls — mTLS
@@ -314,11 +230,11 @@ macOS fallback: `sandbox/macos.rs` using `sandbox-exec` profiles.
 * `in-toto` / `sigstore` — SLSA attestation
 ***
 ## Deliverables Checklist per Phase
-**P0:** `Dockerfile.server`, `Dockerfile.worker`, `docker-compose.prod.yml`, `.env.example`, `.github/workflows/docker.yml`, `scripts/db/init.sql`.
-**P1:** `src/tls.rs`, `src/auth.rs`, `src/secrets.rs`, `deploy/k8s/certs/`, updated all HTTP clients.
-**P2:** `src/storage/`, `src/cache/redis.rs`, `src/gc.rs`, MinIO in compose.
-**P3:** `src/metrics.rs`, OpenTelemetry instrumentation in core/cache/cluster, `deploy/grafana/`, `deploy/prometheus/rules/`.
-**P4:** `src/operator/`, `deploy/k8s/crds/`, full `deploy/k8s/` manifest set, `charts/memobuild/`.
-**P5:** `src/slsa.rs`, `src/sbom.rs`, `src/verify.rs`, `src/audit.rs`, `deploy/k8s/policy/`.
-**P6:** `proto/memobuild/v1/`, gRPC server, RE API compatibility layer, `src/sandbox/`.
-**P7:** `src/tenancy.rs`, `src/admin/`, `src/cdn.rs`, extended portal SPA.
+**P0 [DONE]:** ✅ `Dockerfile.server`, `docker-compose.prod.yml`, `.env.example`, `scripts/db/init.sql`, `.github/workflows/docker.yml`.
+**P1 [DONE]:** ✅ `src/tls.rs`, `src/auth.rs`, `src/secrets.rs`, `deploy/k8s/certs/certificates.yaml`, updated HTTP clients.
+**P2 [PARTIAL]:** ✅ `src/storage/s3.rs`, `src/storage/local.rs`, `src/storage/mod.rs`, `src/cache_redis.rs`, `src/gc.rs`, MinIO in compose. ❌ `src/storage/gcs.rs` is stub, `stream_get` missing from trait.
+**P3 [DONE]:** ✅ `src/metrics.rs`, OpenTelemetry instrumentation in `src/tracing.rs`, `monitoring/grafana/`, `monitoring/prometheus/alert_rules.yml`.
+**P4 [PARTIAL]:** ✅ `src/operator/`, `deploy/k8s/crds/`, `charts/memobuild/`. ❌ Full `deploy/k8s/` manifest set (missing standalone StatefulSet, PodSecurityPolicy, standalone NetworkPolicy; PriorityClass included in pdb-hpa-network.yaml).
+**P5 [DONE]:** ✅ `src/slsa.rs`, `src/sbom.rs`, `src/verify.rs`, `src/audit.rs`, `deploy/k8s/policy/sigstore-policy.yaml`.
+**P6 [PARTIAL]:** ✅ `proto/memobuild/v1/execution.proto`, gRPC server + RE API, `src/sandbox/`. ❌ Linux/macOS sandbox modules.
+**P7 [NOT STARTED]:** ❌ `src/tenancy.rs`, `src/admin/`, `src/cdn.rs`, extended portal SPA.

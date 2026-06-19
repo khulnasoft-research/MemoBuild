@@ -119,7 +119,12 @@ impl AuthState {
         Ok(token)
     }
 
-    pub async fn check_rate_limit(&self, key: &str, max_requests: u32, window_secs: u64) -> Result<bool> {
+    pub async fn check_rate_limit(
+        &self,
+        key: &str,
+        max_requests: u32,
+        window_secs: u64,
+    ) -> Result<bool> {
         let mut buckets = self.rate_limit_buckets.write().await;
         let now = Instant::now();
         let window = Duration::from_secs(window_secs);
@@ -138,10 +143,13 @@ impl AuthState {
             bucket.count += 1;
             Ok(true)
         } else {
-            buckets.insert(key.to_string(), RateLimitBucket {
-                count: 1,
-                window_start: now,
-            });
+            buckets.insert(
+                key.to_string(),
+                RateLimitBucket {
+                    count: 1,
+                    window_start: now,
+                },
+            );
             Ok(true)
         }
     }
@@ -154,7 +162,7 @@ fn generate_token() -> String {
 }
 
 fn sha256_hash(input: &str) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     hex::encode(hasher.finalize())
@@ -162,12 +170,14 @@ fn sha256_hash(input: &str) -> String {
 
 fn argon2_hash(password: &str, salt: &str, argon2: &Argon2) -> String {
     let mut hash = [0u8; 32];
-    argon2.hash_password_into(password.as_bytes(), salt.as_bytes(), &mut hash).unwrap();
+    argon2
+        .hash_password_into(password.as_bytes(), salt.as_bytes(), &mut hash)
+        .unwrap();
     base64_encode(&hash)
 }
 
 fn base64_encode(data: &[u8]) -> String {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
     STANDARD.encode(data)
 }
 
@@ -182,7 +192,9 @@ fn verify_password(password: &str, stored: &str) -> Result<bool> {
     let argon2 = Argon2::default();
 
     let mut bytes = [0u8; 32];
-    argon2.hash_password_into(password.as_bytes(), salt.as_bytes(), &mut bytes).unwrap();
+    argon2
+        .hash_password_into(password.as_bytes(), salt.as_bytes(), &mut bytes)
+        .unwrap();
     let computed = base64_encode(&bytes);
 
     Ok(computed == hash)
@@ -280,12 +292,17 @@ pub async fn auth_middleware<B>(
     next: Next<B>,
 ) -> Result<Response, StatusCode> {
     // Check rate limit for unauthenticated requests first
-    let client_ip = req.headers()
+    let client_ip = req
+        .headers()
         .get("x-forwarded-for")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("unknown");
 
-    if !state.check_rate_limit(&format!("unauth:{}", client_ip), 100, 60).await.unwrap_or(true) {
+    if !state
+        .check_rate_limit(&format!("unauth:{}", client_ip), 100, 60)
+        .await
+        .unwrap_or(true)
+    {
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
 
@@ -304,13 +321,21 @@ pub async fn auth_middleware<B>(
         }
     };
 
-    if !state.is_valid_token(&token).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
+    if !state
+        .is_valid_token(&token)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    {
         warn!("Invalid token: {}", &token[..8.min(token.len())]); // Log first 8 chars only
         return Err(StatusCode::UNAUTHORIZED);
     }
 
     // Check rate limit for authenticated requests (1000 req/min)
-    if !state.check_rate_limit(&format!("auth:{}", &token[..8]), 1000, 60).await.unwrap_or(true) {
+    if !state
+        .check_rate_limit(&format!("auth:{}", &token[..8]), 1000, 60)
+        .await
+        .unwrap_or(true)
+    {
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
 
