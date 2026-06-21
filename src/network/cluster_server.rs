@@ -7,7 +7,7 @@ use crate::cache::cluster::{CacheCluster, ClusterStatus};
 use crate::cache::remote::RemoteCache;
 use crate::network::scaling::{AutoScaler, ScalingMetrics};
 use crate::server::metadata::MetadataStoreTrait;
-use crate::server::storage::ArtifactStorage;
+use crate::server::storage::ArtifactStorageAsync;
 
 use anyhow::Result;
 use axum::{
@@ -26,7 +26,7 @@ use tokio::sync::broadcast;
 pub struct ClusterAppState {
     pub cluster: Arc<CacheCluster>,
     pub metadata_store: Arc<dyn MetadataStoreTrait>,
-    pub storage: Arc<dyn ArtifactStorage>,
+    pub storage: Arc<dyn ArtifactStorageAsync>,
     pub distributed_cache: Arc<dyn RemoteCache>,
     pub auto_scaler: Arc<AutoScaler>,
     pub tx_events: broadcast::Sender<crate::dashboard::BuildEvent>,
@@ -36,7 +36,7 @@ pub struct ClusterAppState {
 pub struct ClusterServer {
     pub cluster: Arc<CacheCluster>,
     pub metadata_store: Arc<dyn MetadataStoreTrait>,
-    pub storage: Arc<dyn ArtifactStorage>,
+    pub storage: Arc<dyn ArtifactStorageAsync>,
     pub distributed_cache: Arc<dyn RemoteCache>,
     pub auto_scaler: Arc<AutoScaler>,
 }

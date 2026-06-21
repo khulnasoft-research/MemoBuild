@@ -1,6 +1,6 @@
 use crate::server::metadata::MetadataStore;
-use crate::server::storage::{ArtifactStorage, LocalStorage};
-use crate::storage::storage_from_env;
+use crate::server::storage::LocalStorage;
+use crate::storage::{ArtifactStorageAsync, storage_async_from_env};
 use anyhow::Result;
 use axum::{
     body::Bytes,
@@ -27,7 +27,7 @@ pub mod storage;
 
 pub struct AppState {
     pub metadata: MetadataStore,
-    pub storage: Arc<dyn ArtifactStorage>,
+    pub storage: Arc<dyn ArtifactStorageAsync>,
     pub webhook_url: Option<String>,
     pub tx_events: broadcast::Sender<crate::dashboard::BuildEvent>,
     pub current_dag: Arc<std::sync::Mutex<Option<crate::graph::BuildGraph>>>,
@@ -66,7 +66,7 @@ pub async fn start_server(
 ) -> Result<()> {
     let db_path = data_dir.join("metadata.db");
     let metadata = MetadataStore::new(&db_path)?;
-    let storage: Arc<dyn ArtifactStorage> = match storage_from_env(&data_dir) {
+    let storage: Arc<dyn ArtifactStorageAsync> = match storage_async_from_env(&data_dir) {
         Ok(s) => Arc::from(s),
         Err(_) => Arc::new(LocalStorage::new(&data_dir)?),
     };
@@ -502,7 +502,7 @@ async fn get_artifact(
     Path(hash): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    match state.storage.get(&hash) {
+    match state.storage.get_async(&hash).await {
         Ok(Some(data)) => {
             let _ = state.metadata.touch(&hash);
             (StatusCode::OK, data).into_response()
@@ -538,7 +538,7 @@ async fn put_artifact(
     let size = body.len() as u64;
 
     // 2. Store the blob
-    match state.storage.put(&hash, &body) {
+    match state.storage.put_async(&hash, &body).await {
         Ok(path) => {
             // 3. Update metadata
             if let Err(e) = state.metadata.insert(&hash, &path, size) {
@@ -568,7 +568,7 @@ async fn gc_cache(
             let mut node_count = 0;
             for hash in hashes {
                 if let Ok(Some(_entry)) = state.metadata.get(&hash) {
-                    let _ = state.storage.delete(&hash);
+                    let _ = state.storage.delete_async(&hash).await;
                     let _ = state.metadata.delete(&hash);
                     node_count += 1;
                 }
@@ -578,7 +578,7 @@ async fn gc_cache(
             let mut layer_count = 0;
             if let Ok(unused_layers) = state.metadata.get_unused_layers() {
                 for (hash, _path) in unused_layers {
-                    let _ = state.storage.delete(&hash);
+                    let _ = state.storage.delete_async(&hash).await;
                     let _ = state.metadata.delete_layer_metadata(&hash);
                     layer_count += 1;
                 }
@@ -637,7 +637,7 @@ async fn get_layer(
     Path(hash): Path<String>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    match state.storage.get(&hash) {
+    match state.storage.get_async(&hash).await {
         Ok(Some(data)) => (StatusCode::OK, data).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => {
@@ -668,7 +668,7 @@ async fn put_layer(
     }
 
     let size = body.len() as u64;
-    match state.storage.put(&hash, &body) {
+    match state.storage.put_async(&hash, &body).await {
         Ok(path) => {
             if let Err(e) = state.metadata.insert_layer(&hash, &path, size) {
                 eprintln!("Error updating layer metadata: {}", e);

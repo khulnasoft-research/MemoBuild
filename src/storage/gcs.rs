@@ -14,6 +14,7 @@ use tokio::sync::OnceCell;
 ///
 /// Uses the `google-cloud-storage` crate with Application Default Credentials.
 /// Set `GOOGLE_APPLICATION_CREDENTIALS` or run on GCE/GKE with a service account.
+#[derive(Clone)]
 pub struct GcsStorage {
     client: Arc<OnceCell<Client>>,
     bucket: String,
@@ -177,5 +178,57 @@ impl ArtifactStorage for GcsStorage {
             .map_err(|e| anyhow::anyhow!("GCS delete failed: {}", e))?;
 
         Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::storage::ArtifactStorageAsync for GcsStorage {
+    async fn put_async(&self, hash: &str, data: &[u8]) -> Result<String> {
+        let s = self.clone();
+        let hash = hash.to_string();
+        let data = data.to_vec();
+        tokio::task::spawn_blocking(move || s.put(&hash, &data))
+            .await
+            .map_err(|e| anyhow::anyhow!("join error: {}", e))?
+    }
+
+    async fn get_async(&self, hash: &str) -> Result<Option<Vec<u8>>> {
+        let s = self.clone();
+        let hash = hash.to_string();
+        tokio::task::spawn_blocking(move || s.get(&hash))
+            .await
+            .map_err(|e| anyhow::anyhow!("join error: {}", e))?
+    }
+
+    async fn stream_get_async<'a>(
+        &'a self,
+        hash: &'a str,
+    ) -> Result<Option<Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send + 'a>>>> {
+        let s = self.clone();
+        let hash = hash.to_string();
+        let result = tokio::task::spawn_blocking(move || s.get(&hash))
+            .await
+            .map_err(|e| anyhow::anyhow!("join error: {}", e))??;
+
+        Ok(result.map(|data| {
+            Box::pin(futures::stream::once(async move { Ok(data) }))
+                as Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + Send + 'a>>
+        }))
+    }
+
+    async fn exists_async(&self, hash: &str) -> Result<bool> {
+        let s = self.clone();
+        let hash = hash.to_string();
+        tokio::task::spawn_blocking(move || s.exists(&hash))
+            .await
+            .map_err(|e| anyhow::anyhow!("join error: {}", e))?
+    }
+
+    async fn delete_async(&self, hash: &str) -> Result<()> {
+        let s = self.clone();
+        let hash = hash.to_string();
+        tokio::task::spawn_blocking(move || s.delete(&hash))
+            .await
+            .map_err(|e| anyhow::anyhow!("join error: {}", e))?
     }
 }
